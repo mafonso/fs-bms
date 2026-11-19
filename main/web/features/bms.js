@@ -63,6 +63,7 @@ export default function (App) {
         <div class="msg err bms-alert" data-k="alert"></div>
         <div class="bms-cells" data-k="cells"></div>
         <div class="bms-sum" data-k="sum"></div>
+        <div class="bms-sum" data-k="lim"></div>
         <div class="bms-charts">
           <div><h3>State of charge (%)</h3><div data-k="c-soc"></div></div>
           <div><h3>Power (W, + charging)</h3><div data-k="c-pw"></div></div>
@@ -95,7 +96,7 @@ export default function (App) {
       App.on('bms', d => {
         const s = d.sample;
         $('dot').className = 'dot ' + (d.ok ? 'ok' : d.polls_err ? 'err' : '');
-        const who = [d.name, d.info && `fw ${d.info.fw} / sw ${d.info.sw}`].filter(Boolean).join(' · ');
+        const who = [d.name, d.info && `version ${d.info.sw} · master ${d.info.fw} · IAP ${d.info.iap}`].filter(Boolean).join(' · ');
         const st = d.state === 'paused' ? `paused for ${Math.ceil(d.paused_s / 60)} min`
           : d.ok ? `updated ${s ? s.age_s : '?'} s ago, every ${d.interval_s} s` : (d.error || d.state);
         $('state').textContent = [st, who].filter(Boolean).join(' · ');
@@ -110,10 +111,17 @@ export default function (App) {
         $('v').textContent = f(s.voltage, 2);
         $('a').textContent = f(s.current, 1);
         $('temps').textContent = s.temps.length ? s.temps.map(t => f(t, 0)).join(' / ') + ' °C' : 'no temperature';
-        $('wf').textContent = s.warn || s.fault ? `warn ${s.warn} · fault ${s.fault}` : 'no warnings';
-        $('wf').className = 'sub' + (s.warn || s.fault ? ' dis' : '');
-        $('alert').style.display = s.warn || s.fault ? 'block' : 'none';
-        $('alert').textContent = `BMS reports warning ${s.warn}, fault ${s.fault}`;
+        const bank = s.bank_warn || s.bank_fault;
+        $('wf').textContent = s.warn || s.fault ? `warn ${s.warn} · fault ${s.fault}` : bank ? 'warning in bank' : 'no warnings';
+        $('wf').className = 'sub' + (s.warn || s.fault || bank ? ' dis' : '');
+        $('alert').style.display = s.warn || s.fault || bank ? 'block' : 'none';
+        $('alert').textContent = s.warn || s.fault ? `This pack reports warning ${s.warn}, fault ${s.fault}`
+          : `Another pack in the bank reports warning ${s.bank_warn}, fault ${s.bank_fault}`;
+        const l = s.limits;
+        $('lim').textContent = [
+          l && `Charge limit ${f(l.charge_v, 1)} V / ${f(l.charge_a, 0)} A · discharge limit ${f(l.discharge_v, 1)} V / ${f(l.discharge_a, 0)} A`,
+          typeof s.soh === 'number' && `SoH ${f(s.soh, 0)} %`,
+        ].filter(Boolean).join(' · ');
         const lo = s.cells.indexOf(s.cell_min), hi = s.cells.indexOf(s.cell_max);
         $('cells').innerHTML = s.cells.map((c, i) =>
           `<div class="bms-cell${i === lo ? ' min' : i === hi ? ' max' : ''}"><span>${i + 1}</span><b>${f(c, 3)}</b></div>`).join('');
@@ -140,7 +148,7 @@ export default function (App) {
         <label>Poll interval (seconds, 10–3600)<input data-k="interval" type="number" min="10" max="3600"></label>
         <label>BMS address (empty: first pack named F07*/F10*)<input data-k="addr" placeholder="AA:BB:CC:DD:EE:FF"></label>
         <label>Pairing passkey<input data-k="pin" inputmode="numeric" autocomplete="off" placeholder=""></label>
-        <p class="hint">The pack only pairs with its passkey. It is stored on the board and never shown again.</p>
+        <p class="hint">Leave empty to keep the current passkey. Felicity's default is 123456. A passkey you set is stored on the board and never shown again.</p>
         <div class="row"><button data-k="pause">Pause 15 min for the FSolar app</button><button data-k="poll">Poll now</button></div>
         <div class="msg" data-k="msg"></div>`;
       const $ = k => el.querySelector(`[data-k="${k}"]`);
@@ -163,7 +171,7 @@ export default function (App) {
       $('interval').value = stored.interval_s ?? 30;
       $('addr').value = stored.pinned_addr ?? '';
       $('pin').value = '';
-      $('pin').placeholder = stored.pin_set ? 'set (leave empty to keep)' : 'not set';
+      $('pin').placeholder = stored.pin_set ? 'custom passkey set' : 'default (123456)';
     },
     async save() {
       const $ = $s;

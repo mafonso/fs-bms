@@ -1,6 +1,7 @@
 // Host test for main/features/bms_proto.c. Run: test/run.sh
-// Inline samples are from aiobmsble's tests (Apache-2.0); captures in
-// test/fixtures/*.json are checked too.
+// Inline samples: RT and BAS from aiobmsble's tests, RT2 from esphome-felicity-bms's
+// PROTOCOL.md (both Apache-2.0; see NOTICE). Captures in test/fixtures/*.json are
+// checked too.
 #include <assert.h>
 #include <math.h>
 #include <stdio.h>
@@ -23,6 +24,27 @@ static const char RT[] =
     "\"LVolCur\":[[576,480],[4320,4800]],\"BMSpara\":[[3,14]],"
     "\"BLVolCu\":[[576,480],[1600,1600]],"
     "\"BtemList\":[[340,340,340,340,32767,32767,32767,32767]]}";
+
+// Second pack of a two-pack bank, charging at 0.9 A; bank values (Batt, Batsoc,
+// LVolCur) differ from this pack's.
+static const char RT2[] =
+    "{\"CommVer\":1,\"wifiSN\":\"F0757048314XXXXXXXX\",\"modID\":1,\"date\":\"20260722144050\","
+    "\"DevSN\":\"0757048314XXXXXXXX\",\"Type\":112,\"SubType\":7353,\"workM\":0,\"Estate\":9152,"
+    "\"Bfault\":0,\"Bwarn\":0,\"Bstate\":9152,\"BBfault\":0,\"BBwarn\":0,\"HtCuSt\":0,"
+    "\"BTemp\":[[190,180],[513,256]],\"Batt\":[[53500],[19],[null]],\"Batsoc\":[[8450,1000,700000]],"
+    "\"Templist\":[[180,180],[0,0],[65535,65535],[65535,65535]],\"BattList\":[[53530,65535],[9,-1]],"
+    "\"BatsocList\":[[8400,1000,350000]],\"BatcelList\":[[3347,3347,3348,3347,3347,3347,3347,3347,"
+    "3348,3347,3347,3347,3347,3347,3348,3347],[65535,65535,65535,65535,65535,65535,65535,65535,"
+    "65535,65535,65535,65535,65535,65535,65535,65535]],\"EMSpara\":[[2,6]],"
+    "\"BMaxMin\":[[3348,3347],[2,0]],\"LVolCur\":[[576,480],[2480,3200]],\"BMSpara\":[[2,6]],"
+    "\"BLVolCu\":[[576,480],[1280,1600]],\"BtemList\":[[180,180,180,180,32767,32767,32767,32767]]}";
+
+// Zero-initialised frame the BMS can send right after a connect.
+static const char RT_ZERO[] =
+    "{\"CommVer\":1,\"Bfault\":0,\"Bwarn\":0,\"BBfault\":0,\"BBwarn\":0,"
+    "\"BattList\":[[0,65535],[0,-1]],\"BatsocList\":[[0,0,0]],"
+    "\"BatcelList\":[[0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0]],\"BtemList\":[[0,0,0,0,32767,32767,32767,32767]],"
+    "\"BLVolCu\":[[0,0],[0,0]]}";
 
 static const char BAS[] =
     "{\"CommVer\":1,\"version\":\"2.06\",\"wifiSN\":\"F100011002424470238\",\"COM\":3,\"iotType\":3,"
@@ -70,8 +92,35 @@ static void test_sample_real(void)
         assert(s.cell_max_idx == 8 && s.cell_min_idx == 0);   // matches BMaxMin [[3389,3378],[8,0]]
         assert(s.n_temps == 4 && NEAR(s.temps[0], 34.0) && NEAR(s.temps[3], 34.0));
         assert(s.warn == 0 && s.fault == 0 && s.problem == 0);
+        assert(NEAR(s.soh, 100.0));
+        assert(s.have_limits && NEAR(s.charge_v_limit, 57.6) && NEAR(s.discharge_v_limit, 48.0) &&
+               NEAR(s.charge_i_limit, 160.0) && NEAR(s.discharge_i_limit, 160.0));
         cJSON_Delete(msg);
     }
+}
+
+static void test_second_pack(void)
+{
+    cJSON *msg = feed(RT2, 20);
+    bms_sample_t s;
+    char err[64];
+    assert(bms_decode_real(msg, &s, err, sizeof(err)));
+    // Per-pack values (BattList), not the bank's (Batt 53.5 V / 1.9 A).
+    assert(NEAR(s.voltage, 53.53) && NEAR(s.current, 0.9) && NEAR(s.soc, 84.0));
+    assert(s.n_cells == 16 && NEAR(s.cell_delta, 0.001) && s.cell_max_idx == 2 && s.cell_min_idx == 0);
+    assert(s.n_temps == 4 && NEAR(s.temps[0], 18.0));
+    assert(NEAR(s.charge_i_limit, 128.0) && NEAR(s.discharge_i_limit, 160.0));
+    cJSON_Delete(msg);
+}
+
+static void test_zero_frame(void)
+{
+    cJSON *msg = feed(RT_ZERO, 35);
+    bms_sample_t s;
+    char err[64];
+    assert(!bms_decode_real(msg, &s, err, sizeof(err)));
+    assert(strstr(err, "stale"));
+    cJSON_Delete(msg);
 }
 
 static void test_basic(void)
@@ -114,7 +163,8 @@ static void test_framing(void)
 static void test_strings_and_limits(void)
 {
     const char *j = "{\"CommVer\":1,\"BattList\":[[\"52100\"],[\"-123\"]],\"BatsocList\":[[5000,1000,100000]],"
-                    "\"BatcelList\":[[3300,\"3310\",65535]],\"BtemList\":[[250,32767,-50]],\"Bwarn\":\"4\",\"Bfault\":1}";
+                    "\"BatcelList\":[[3300,\"3310\",65535]],\"BtemList\":[[250,32767,-50]],\"Bwarn\":\"4\",\"Bfault\":1,"
+                    "\"BBwarn\":\"4\"}";
     cJSON *msg = cJSON_Parse(j);
     bms_sample_t s;
     char err[64];
@@ -122,7 +172,8 @@ static void test_strings_and_limits(void)
     assert(NEAR(s.voltage, 52.1) && NEAR(s.current, -12.3));
     assert(s.n_cells == 2 && NEAR(s.cell_delta, 0.010));
     assert(s.n_temps == 2 && NEAR(s.temps[1], -5.0));
-    assert(s.warn == 4 && s.fault == 1 && s.problem == 5);
+    assert(s.warn == 4 && s.fault == 0 && s.bank_warn == 4 && s.bank_fault == 1 && s.problem == 5);
+    assert(!s.have_limits);
     cJSON_Delete(msg);
 
     msg = cJSON_Parse("{\"BattList\":[[99999999999],[0]],\"BatsocList\":[[1,1,1]],"
@@ -163,6 +214,8 @@ static void test_capture(const char *path)
 int main(int argc, char **argv)
 {
     test_sample_real();
+    test_second_pack();
+    test_zero_frame();
     test_basic();
     test_framing();
     test_strings_and_limits();

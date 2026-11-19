@@ -45,25 +45,32 @@ typedef struct {
     float current;          // A, positive while charging
     float soc;              // %
     float remaining_ah;     // Ah
-    float capacity_ah;      // Ah, BatsocList[0][2] / 1000
+    float capacity_ah;      // Ah, BatsocList[0][2] / 1000 (not always the nameplate value)
+    float soh;              // %, BatsocList[0][1] / 10 (likely state of health); NAN if absent
     int n_cells;
     float cells[BMS_MAX_CELLS];   // V
     float cell_min, cell_max, cell_delta;
     int cell_min_idx, cell_max_idx;   // 0-based
     int n_temps;
     float temps[BMS_MAX_TEMPS];   // °C
-    uint32_t warn, fault;
-    int64_t problem;        // Bwarn + Bfault
+    uint32_t warn, fault;            // this pack: BBwarn, BBfault
+    uint32_t bank_warn, bank_fault;  // whole parallel bank: Bwarn, Bfault
+    int64_t problem;                 // Bwarn + Bfault
+    bool have_limits;                // BLVolCu present
+    float charge_v_limit, discharge_v_limit;   // V
+    float charge_i_limit, discharge_i_limit;   // A; the charge limit drops to 0 when full
 } bms_sample_t;
 
 // Decode a "get dev real infor" reply. On failure returns false and puts the
-// reason in err.
+// reason in err. A frame with an implausible pack voltage (outside 10-70 V) is
+// rejected: right after connecting, the BMS can answer with all values still zero.
 bool bms_decode_real(const cJSON *msg, bms_sample_t *out, char *err, size_t err_len);
 
 typedef struct {
     char serial[32];    // DevSN
     char sw[16];        // version
-    char fw[16];        // M1SwVer
+    char fw[16];        // M1SwVer ("Master Version" in the FSolar app)
+    char iap[16];       // M2SwVer ("IAP Version")
     char model[16];     // Type
 } bms_info_t;
 

@@ -152,6 +152,17 @@ static uint32_t age_s(int64_t since_us)
     return (uint32_t)((esp_timer_get_time() - since_us) / 1000000);
 }
 
+// The passkey from `bms pin`, else the default. *custom: whether one was set.
+static uint32_t passkey(bool *custom)
+{
+    uint32_t pin;
+    bool set = settings_get_bms_pin(&pin) == ESP_OK;
+    if (custom) {
+        *custom = set;
+    }
+    return set ? pin : CONFIG_APP_BMS_DEFAULT_PASSKEY;
+}
+
 // ---------------------------------------------------------------------------
 // NimBLE callbacks (host task). Keep short; hand results over via s_ev.
 
@@ -244,17 +255,10 @@ static int gap_event(struct ble_gap_event *ev, void *arg)
         xEventGroupSetBits(s_ev, EV_ENC);
         break;
     case BLE_GAP_EVENT_PASSKEY_ACTION: {
-        // MITM pairing. We are KeyboardOnly: type the passkey from `bms pin`.
+        // Passkey entry. We are KeyboardOnly: type the BMS's fixed passkey.
         struct ble_sm_io io = {.action = ev->passkey.params.action};
-        uint32_t pin;
-        bool have_pin = settings_get_bms_pin(&pin) == ESP_OK;
         if (io.action == BLE_SM_IOACT_INPUT || io.action == BLE_SM_IOACT_DISP) {
-            if (!have_pin) {
-                ESP_LOGE(TAG, "BMS wants a passkey: set it with `bms pin <passkey>`");
-                ble_gap_terminate(ev->passkey.conn_handle, BLE_ERR_AUTH_FAIL);
-                break;
-            }
-            io.passkey = pin;
+            io.passkey = passkey(NULL);
         } else if (io.action == BLE_SM_IOACT_NUMCMP) {
             ESP_LOGI(TAG, "numeric comparison %06" PRIu32 ": accepting", ev->passkey.params.numcmp);
             io.numcmp_accept = 1;
@@ -513,11 +517,11 @@ static bool session(char *err, size_t err_len)
         rc = (b & EV_ENC) ? s_enc_rc : (b & EV_DISCONNECT) ? BLE_HS_ENOTCONN : BLE_HS_ETIMEOUT;
     }
     if (rc != 0) {
-        uint32_t pin;
-        bool have_pin = settings_get_bms_pin(&pin) == ESP_OK;
+        bool custom;
+        passkey(&custom);
         // SMP errors from the peer are BLE_HS_ERR_SM_PEER_BASE (0x500) + reason.
-        const char *why = !have_pin ? "passkey not set (bms pin <passkey>)"
-                        : rc == BLE_HS_SM_PEER_ERR(BLE_SM_ERR_CONFIRM_MISMATCH) ? "wrong passkey"
+        const char *why = rc == BLE_HS_SM_PEER_ERR(BLE_SM_ERR_CONFIRM_MISMATCH)
+                              ? (custom ? "wrong passkey (bms pin)" : "default passkey refused; set it with bms pin")
                         : rc == BLE_HS_SM_PEER_ERR(BLE_SM_ERR_AUTHREQ) ? "BMS rejected our pairing parameters"
                         : rc == BLE_HS_SM_PEER_ERR(BLE_SM_ERR_REPEATED) ? "BMS is refusing repeated pairing attempts; wait"
                         : "pairing/encryption failed";
@@ -577,7 +581,8 @@ static bool session(char *err, size_t err_len)
             bms_info_t info;
             bms_decode_basic(msg, &info);
             ESP_LOGI(TAG, "device info: %s", raw);
-            ESP_LOGI(TAG, "serial %s, model %s, sw %s, fw %s", info.serial, info.model, info.sw, info.fw);
+            ESP_LOGI(TAG, "serial %s, model %s, version %s, master %s, IAP %s", info.serial, info.model,
+                     info.sw, info.fw, info.iap);
             lock();
             s_st.info = info;
             s_st.have_info = true;
@@ -590,14 +595,25 @@ static bool session(char *err, size_t err_len)
         }
     }
 
-    cJSON *msg = request(BMS_CMD_REAL, &raw, err, err_len);
-    if (!msg) {
-        goto out;
-    }
     bms_sample_t s;
     char derr[64];
-    bool decoded = bms_decode_real(msg, &s, derr, sizeof(derr));
-    cJSON_Delete(msg);
+    bool decoded;
+    // Right after connecting the BMS can answer with an all-zero frame; ask once more.
+    for (int attempt = 0;; attempt++) {
+        cJSON *msg = request(BMS_CMD_REAL, &raw, err, err_len);
+        if (!msg) {
+            goto out;
+        }
+        decoded = bms_decode_real(msg, &s, derr, sizeof(derr));
+        cJSON_Delete(msg);
+        if (decoded || attempt == 1 || strncmp(derr, "stale", 5) != 0) {
+            break;
+        }
+        ESP_LOGD(TAG, "%s; asking again", derr);
+        free(raw);
+        raw = NULL;
+        vTaskDelay(pdMS_TO_TICKS(1000));
+    }
 
     int8_t rssi = 0;
     ble_gap_conn_rssi(s_conn, &rssi);
@@ -649,8 +665,14 @@ static void log_sample(const bms_sample_t *s)
     for (int i = 0; i < s->n_temps; i++) {
         n += snprintf(temps + n, sizeof(temps) - n, "%s%.1f", i ? " " : "", s->temps[i]);
     }
-    ESP_LOGI(TAG, "%.3f V %.1f A SoC %.2f %% %.1f/%.1f Ah warn 0x%" PRIx32 " fault 0x%" PRIx32,
-             s->voltage, s->current, s->soc, s->remaining_ah, s->capacity_ah, s->warn, s->fault);
+    ESP_LOGI(TAG, "%.3f V %.1f A SoC %.2f %% %.1f/%.1f Ah warn 0x%" PRIx32 " fault 0x%" PRIx32
+                  " (bank 0x%" PRIx32 "/0x%" PRIx32 ")",
+             s->voltage, s->current, s->soc, s->remaining_ah, s->capacity_ah, s->warn, s->fault, s->bank_warn,
+             s->bank_fault);
+    if (s->have_limits) {
+        ESP_LOGI(TAG, "limits: charge %.1f V %.1f A, discharge %.1f V %.1f A", s->charge_v_limit,
+                 s->charge_i_limit, s->discharge_v_limit, s->discharge_i_limit);
+    }
     ESP_LOGI(TAG, "%d cells, delta %.3f V (#%d %.3f .. #%d %.3f)", s->n_cells, s->cell_delta,
              s->cell_min_idx + 1, s->cell_min, s->cell_max_idx + 1, s->cell_max);
     ESP_LOGI(TAG, "cells V: %s", cells);
@@ -751,7 +773,7 @@ static cJSON *status_json(void)
     cJSON_AddStringToObject(o, "name", s_st.name);
     cJSON_AddStringToObject(o, "addr", s_st.addr);
     uint32_t pin;
-    cJSON_AddBoolToObject(o, "pin_set", settings_get_bms_pin(&pin) == ESP_OK);
+    cJSON_AddBoolToObject(o, "pin_set", settings_get_bms_pin(&pin) == ESP_OK);   // false: default passkey
     char pinned[SETTINGS_BMS_ADDR_MAX];
     settings_get_bms_addr(pinned);
     cJSON_AddStringToObject(o, "pinned_addr", pinned);
@@ -761,6 +783,7 @@ static cJSON *status_json(void)
         cJSON_AddStringToObject(i, "model", s_st.info.model);
         cJSON_AddStringToObject(i, "sw", s_st.info.sw);
         cJSON_AddStringToObject(i, "fw", s_st.info.fw);
+        cJSON_AddStringToObject(i, "iap", s_st.info.iap);
     }
     if (s_st.have_sample) {
         const bms_sample_t *s = &s_st.sample;
@@ -773,6 +796,16 @@ static cJSON *status_json(void)
         cJSON_AddNumberToObject(d, "soc", s->soc);
         cJSON_AddNumberToObject(d, "remaining_ah", s->remaining_ah);
         cJSON_AddNumberToObject(d, "capacity_ah", s->capacity_ah);
+        if (!isnan(s->soh)) {
+            cJSON_AddNumberToObject(d, "soh", s->soh);
+        }
+        if (s->have_limits) {
+            cJSON *l = cJSON_AddObjectToObject(d, "limits");
+            cJSON_AddNumberToObject(l, "charge_v", s->charge_v_limit);
+            cJSON_AddNumberToObject(l, "discharge_v", s->discharge_v_limit);
+            cJSON_AddNumberToObject(l, "charge_a", s->charge_i_limit);
+            cJSON_AddNumberToObject(l, "discharge_a", s->discharge_i_limit);
+        }
         cJSON_AddItemToObject(d, "cells", cJSON_CreateFloatArray(s->cells, s->n_cells));
         cJSON_AddNumberToObject(d, "cell_min", s->cell_min);
         cJSON_AddNumberToObject(d, "cell_max", s->cell_max);
@@ -780,6 +813,8 @@ static cJSON *status_json(void)
         cJSON_AddItemToObject(d, "temps", cJSON_CreateFloatArray(s->temps, s->n_temps));
         cJSON_AddNumberToObject(d, "warn", s->warn);
         cJSON_AddNumberToObject(d, "fault", s->fault);
+        cJSON_AddNumberToObject(d, "bank_warn", s->bank_warn);
+        cJSON_AddNumberToObject(d, "bank_fault", s->bank_fault);
     }
     unlock();
     return o;
@@ -840,15 +875,17 @@ static esp_err_t metrics_get(httpd_req_t *req)
         s_st.polls_ok, s_st.polls_err);
     gauge(&b, "bms_poll_interval_seconds", "Configured poll interval", interval);
     if (s_st.have_info || s_st.addr[0]) {
-        char name[32], serial[32], model[16], sw[16], fw[16];
+        char name[32], serial[32], model[16], sw[16], fw[16], iap[16];
         label_safe(name, s_st.name, sizeof(name));
         label_safe(serial, s_st.info.serial, sizeof(serial));
         label_safe(model, s_st.info.model, sizeof(model));
         label_safe(sw, s_st.info.sw, sizeof(sw));
         label_safe(fw, s_st.info.fw, sizeof(fw));
+        label_safe(iap, s_st.info.iap, sizeof(iap));
         out(&b, "# HELP bms_info BMS identity\n# TYPE bms_info gauge\n"
-                "bms_info{name=\"%s\",address=\"%s\",serial=\"%s\",model=\"%s\",sw_version=\"%s\",fw_version=\"%s\"} 1\n",
-            name, s_st.addr, serial, model, sw, fw);
+                "bms_info{name=\"%s\",address=\"%s\",serial=\"%s\",model=\"%s\",version=\"%s\","
+                "master_version=\"%s\",iap_version=\"%s\"} 1\n",
+            name, s_st.addr, serial, model, sw, fw, iap);
     }
     if (s_st.have_sample) {
         uint32_t age = age_s(s_st.sample_us);
@@ -874,8 +911,19 @@ static esp_err_t metrics_get(httpd_req_t *req)
             for (int i = 0; i < s->n_temps; i++) {
                 out(&b, "bms_temperature_celsius{sensor=\"%d\"} %.1f\n", i + 1, s->temps[i]);
             }
-            gauge(&b, "bms_warning_code", "Bwarn bit field (0: none)", s->warn);
-            gauge(&b, "bms_fault_code", "Bfault bit field (0: none)", s->fault);
+            if (!isnan(s->soh)) {
+                gauge(&b, "bms_state_of_health_percent", "State of health (BatsocList[0][1], inferred)", s->soh);
+            }
+            if (s->have_limits) {
+                gauge(&b, "bms_charge_voltage_limit_volts", "Charge voltage limit (CVL)", s->charge_v_limit);
+                gauge(&b, "bms_discharge_voltage_limit_volts", "Discharge voltage limit (DVL)", s->discharge_v_limit);
+                gauge(&b, "bms_charge_current_limit_amperes", "Charge current limit (CCL); 0 when full", s->charge_i_limit);
+                gauge(&b, "bms_discharge_current_limit_amperes", "Discharge current limit (DCL)", s->discharge_i_limit);
+            }
+            gauge(&b, "bms_warning_code", "This pack's warning word, BBwarn (0: none)", s->warn);
+            gauge(&b, "bms_fault_code", "This pack's fault word, BBfault (0: none)", s->fault);
+            gauge(&b, "bms_bank_warning_code", "Bank warning word, Bwarn: OR of all packs (0: none)", s->bank_warn);
+            gauge(&b, "bms_bank_fault_code", "Bank fault word, Bfault: OR of all packs (0: none)", s->bank_fault);
             gauge(&b, "bms_problem_code", "Bwarn + Bfault", (double)s->problem);
             gauge(&b, "bms_rssi_dbm", "BLE signal strength during the last poll", s_st.rssi);
         }
@@ -974,7 +1022,7 @@ static const char *set_addr(const char *addr)
     return NULL;
 }
 
-// Pairing passkey. Stored in NVS only; never in the build. "-" removes it.
+// Pairing passkey override, stored in NVS. "-" returns to CONFIG_APP_BMS_DEFAULT_PASSKEY.
 static const char *set_pin(const char *pin)
 {
     if (!strcmp(pin, "-")) {
@@ -1098,7 +1146,7 @@ static void bms_console(void)
 {
     static const esp_console_cmd_t cmd = {
         .command = "bms",
-        .help = "Battery BMS: status | raw | poll | interval <s> | addr <mac>|- | pin <passkey>|- | pause <min> (0 resumes)",
+        .help = "Battery BMS: status | raw | poll | interval <s> | addr <mac>|- | pin <passkey>|- (default) | pause <min> (0 resumes)",
         .func = cmd_bms,
     };
     esp_console_cmd_register(&cmd);
@@ -1136,7 +1184,7 @@ static esp_err_t bms_init(void)
     }
     ble_hs_cfg.sync_cb = on_sync;
     ble_hs_cfg.reset_cb = on_reset;
-    // Authenticated (MITM) pairing with the passkey from `bms pin`, bonded so
+    // Authenticated (MITM) pairing with the BMS passkey (see passkey()), bonded so
     // later sessions only need to encrypt. The BMS rejects Just Works (SMP 0x03).
     ble_hs_cfg.sm_io_cap = BLE_SM_IO_CAP_KEYBOARD_ONLY;
     ble_hs_cfg.sm_mitm = 1;

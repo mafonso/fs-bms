@@ -6,4 +6,7 @@ aiobmsble (https://github.com/patman15/aiobmsble), aiobmsble/bms/felicity_bms.py
 licensed under the Apache License, Version 2.0.
 
 test/test_bms_proto.c contains sample replies taken from aiobmsble's tests
-(tests/bms/test_felicity_bms.py), under the same license.
+(tests/bms/test_felicity_bms.py) and from esphome-felicity-bms's PROTOCOL.md
+(https://github.com/andrein/esphome-felicity-bms), both licensed under the
+Apache License, Version 2.0. docs/felicity-protocol.md draws on the latter's
+protocol reference.

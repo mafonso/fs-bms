@@ -10,11 +10,14 @@ GitHub-Releases OTA and a USB console.
   reference (no change history); update it when a reply shows something new.
 - `main/features/bms_proto.c` must stay free of BLE/IDF calls: `test/run.sh` builds it on the host.
   Run it after any change there; add real captures to `test/fixtures/`.
-- The BMS requires **passkey pairing** (it is DisplayOnly with a fixed passkey). The passkey lives
-  only in NVS (`bms pin`); never put it in source, `sdkconfig*` or docs.
+- The BMS requires **passkey pairing** (DisplayOnly, fixed passkey). The default, 123456, is
+  `CONFIG_APP_BMS_DEFAULT_PASSKEY`; a different one is set at runtime with `bms pin` (NVS). Never
+  commit a user's own passkey.
 - **Hold one BLE connection at a time**: one session per poll, then disconnect, so the FSolar app can
   connect in between. Don't keep the link open.
-- Don't keep polling with a wrong passkey: `bms pause <min>` or `bms pin -` stops the attempts.
+- Don't keep polling with a wrong passkey: `bms pause <min>` stops the attempts.
+- Report this pack's flags (`BBwarn`/`BBfault`, `BattList`, `BLVolCu`) as the pack's values; `Bwarn`,
+  `Batt`, `LVolCur` are bank aggregates. See the protocol reference.
 - Opening the serial port can reset the board, and `bms pause` is RAM-only. Set the port's DTR/RTS
   low before opening it.
 - Keep the NimBLE peripheral role enabled: it carries the ATT server, and the pack's MTU request must

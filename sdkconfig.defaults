@@ -46,7 +46,7 @@ CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=3584
 # BLE central (NimBLE) for the BMS link (features/bms.c). One connection; host
 # memory goes to PSRAM. The peripheral role stays enabled because it brings the
 # ATT server: the BMS sends its own MTU request, which must be answered (the
-# board never advertises). The BMS requires passkey pairing (`bms pin`) before
+# board never advertises). The BMS requires passkey pairing (default 123456) before
 # it accepts notifications; the bond is kept in NVS.
 CONFIG_BT_ENABLED=y
 CONFIG_BT_NIMBLE_ENABLED=y

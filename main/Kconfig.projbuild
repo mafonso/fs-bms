@@ -16,6 +16,13 @@ menu "App configuration"
         string "OTA manifest URL"
         default "https://github.com/mafonso/fs-bms/releases/latest/download/version.json"
 
+    config APP_BMS_DEFAULT_PASSKEY
+        int "Default BMS pairing passkey"
+        range 0 999999
+        default 123456
+        help
+            Felicity's default BLE passkey, used until one is set with `bms pin`.
+
     config APP_HOSTNAME_PREFIX
         string "Hostname prefix"
         default "fs-bms"

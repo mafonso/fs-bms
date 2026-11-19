@@ -6,19 +6,24 @@ JSON API and a USB console. It updates itself from this repo's GitHub Releases.
 
 - **BLE**: every 30 s (configurable) it connects to the BMS, reads the live data and disconnects.
   The BMS accepts one connection at a time, so the FSolar app can connect between polls.
-- **Pairing**: the BMS requires passkey pairing. Set the passkey once with `bms pin`; it is stored
-  in NVS, never in the firmware image. Protocol details: [docs/felicity-protocol.md](docs/felicity-protocol.md).
+- **Pairing**: the BMS requires passkey pairing. The firmware uses Felicity's default passkey,
+  `123456`; set another with `bms pin` (stored in NVS). Protocol details:
+  [docs/felicity-protocol.md](docs/felicity-protocol.md).
 - **Home page** (`http://<board>/`): SoC, power, voltage, current, the 16 cells (lowest/highest
   outlined), temperatures, warnings, and 2-hour SoC/power/cell-delta charts. Board stats are under
   Settings → System.
-- **Exposed**: per-cell voltages, cell min/max/delta, pack voltage/current/power, SoC, remaining and
-  full Ah, temperatures, warning and fault codes, BLE RSSI, poll health.
+- **Exposed**: per-cell voltages, cell min/max/delta, pack voltage/current/power, SoC, SoH, remaining
+  and full Ah, temperatures, charge/discharge limits, warning and fault words (pack and bank), BLE
+  RSSI, poll health.
 
 ## Requirements
 
 - ESP32-S3 with 16 MB flash and 8 MB PSRAM (N16R8), within BLE range of the battery
 - ESP-IDF v6.1
-- A Felicity Solar LiFePO4 battery with BLE (advertises as `F07…` or `F10…`) and its pairing passkey
+- A Felicity Solar LiFePO4 battery with BLE (advertises as `F07…` or `F10…`)
+
+In a parallel bank every pack has its own BLE radio. One board reads one pack (pin it with
+`bms addr`); each pack also reports the bank's totals and flags, exported as the `bms_bank_*` metrics.
 
 ## Build and flash over USB
 
@@ -29,7 +34,7 @@ idf.py build flash monitor
 ```
 
 The Wi-Fi password in `sdkconfig.secrets` only seeds NVS on first boot. Release builds don't
-contain it, and OTA keeps what's in NVS. The same goes for the BMS passkey, which is never in the build.
+contain it, and OTA keeps what's in NVS, including a passkey set with `bms pin`.
 
 ## First setup (USB console)
 
@@ -37,7 +42,7 @@ contain it, and OTA keeps what's in NVS. The same goes for the BMS passkey, whic
 bms> wifi MyNetwork mypassword
 bms> name fs-bms             # DHCP/mDNS hostname
 bms> passwd s3cret           # web admin password (protects Settings, OTA, POST /api/bms)
-bms> bms pin <passkey>       # the battery's BLE pairing passkey
+bms> bms pin <passkey>       # only if the battery doesn't use the default 123456
 bms> bms                     # status + last sample
 ```
 
@@ -48,7 +53,7 @@ bms> bms                     # status + last sample
 | `bms poll` | poll now |
 | `bms interval <s>` | poll interval, 10–3600 s (default 30) |
 | `bms addr <AA:BB:CC:DD:EE:FF>` / `bms addr -` | pin one pack / take the first named `F07*`/`F10*` |
-| `bms pin <passkey>` / `bms pin -` | BLE pairing passkey (re-pairs on the next poll) |
+| `bms pin <passkey>` / `bms pin -` | BLE pairing passkey / back to the default `123456` |
 | `bms pause <min>` | stop polling, e.g. to use the FSolar app; `bms pause 0` resumes. Not kept across reboots |
 
 The first three successful polls after boot log the raw JSON at INFO on the serial console. The web
@@ -70,14 +75,18 @@ log viewer cuts lines at 200 chars, so use `bms raw` or `GET /api/bms/raw` for t
 | `bms_up` | 1 if the last poll succeeded |
 | `bms_polls_total{result="ok"\|"error"}` | counter |
 | `bms_sample_age_seconds` | age of the last good sample |
-| `bms_info{name,address,serial,model,sw_version,fw_version}` | always 1 |
+| `bms_info{name,address,serial,model,version,master_version,iap_version}` | always 1 |
 | `bms_voltage_volts`, `bms_current_amperes`, `bms_power_watts` | current > 0 while charging |
-| `bms_state_of_charge_percent` | |
-| `bms_remaining_capacity_amp_hours`, `bms_full_capacity_amp_hours` | |
+| `bms_state_of_charge_percent`, `bms_state_of_health_percent` | SoH is inferred |
+| `bms_remaining_capacity_amp_hours`, `bms_full_capacity_amp_hours` | capacity as the BMS reports it; may differ from the nameplate |
 | `bms_cell_voltage_volts{cell="1".."N"}`, `bms_cell_count` | |
 | `bms_cell_voltage_min_volts`, `_max_volts`, `_delta_volts` | delta = max − min |
 | `bms_temperature_celsius{sensor="1".."N"}` | sensors reporting `0x7FFF` are left out |
-| `bms_warning_code`, `bms_fault_code`, `bms_problem_code` | `Bwarn`, `Bfault`, and their sum |
+| `bms_charge_voltage_limit_volts`, `bms_discharge_voltage_limit_volts` | this pack's CVL / DVL |
+| `bms_charge_current_limit_amperes`, `bms_discharge_current_limit_amperes` | this pack's CCL / DCL; CCL drops to 0 when full |
+| `bms_warning_code`, `bms_fault_code` | this pack's warning and fault words (`BBwarn`, `BBfault`), 0 = none |
+| `bms_bank_warning_code`, `bms_bank_fault_code` | the parallel bank's (`Bwarn`, `Bfault`: OR of all packs) |
+| `bms_problem_code` | `Bwarn + Bfault` |
 | `bms_rssi_dbm`, `bms_poll_interval_seconds` | |
 
 Value metrics are left out once the last good sample is older than 3 poll intervals (at least 3 min).
@@ -133,4 +142,6 @@ and decoding against sample replies, plus every capture in `test/fixtures/*.json
 ## License
 
 Apache License 2.0, see [LICENSE](LICENSE). The BMS protocol decoder is ported from
-[aiobmsble](https://github.com/patman15/aiobmsble) (Apache-2.0); see [NOTICE](NOTICE).
+[aiobmsble](https://github.com/patman15/aiobmsble), and the field reference draws on
+[esphome-felicity-bms](https://github.com/andrein/esphome-felicity-bms) (both Apache-2.0); see
+[NOTICE](NOTICE).

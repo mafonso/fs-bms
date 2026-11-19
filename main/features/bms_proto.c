@@ -7,6 +7,8 @@
 #define MAX_VAL 0xFFFFFFFFLL        // JSON numbers are limited to 32 bits
 #define NO_CELL 0xFFFF              // padding in unused BatcelList slots
 #define NO_TEMP 0x7FFF              // temperature sensor not fitted
+#define PACK_MV_MIN 10000           // a 16S LiFePO4 pack in service stays within 10-70 V
+#define PACK_MV_MAX 70000
 
 void bms_frame_reset(bms_frame_t *f)
 {
@@ -99,6 +101,10 @@ bool bms_decode_real(const cJSON *msg, bms_sample_t *s, char *err, size_t err_le
     if (!field(msg, "BattList", 0, 0, &v)) {
         return fail(err, err_len, "BattList[0][0] (voltage) missing");
     }
+    if (v < PACK_MV_MIN || v > PACK_MV_MAX) {
+        snprintf(err, err_len, "stale frame (pack voltage %lld mV)", (long long)v);
+        return false;
+    }
     s->voltage = v / 1000.0f;
     if (!field(msg, "BattList", 1, 0, &v)) {
         return fail(err, err_len, "BattList[1][0] (current) missing");
@@ -110,6 +116,8 @@ bool bms_decode_real(const cJSON *msg, bms_sample_t *s, char *err, size_t err_le
     s->soc = soc / 100.0f;
     s->remaining_ah = (float)((double)soc * (double)cap / 1e7);
     s->capacity_ah = cap / 1000.0f;
+    int64_t soh;
+    s->soh = (field(msg, "BatsocList", 0, 1, &soh) && soh > 0 && soh <= 1000) ? soh / 10.0f : NAN;
 
     const cJSON *cells = cJSON_GetArrayItem(cJSON_GetObjectItemCaseSensitive(msg, "BatcelList"), 0);
     if (!cJSON_IsArray(cells)) {
@@ -120,8 +128,11 @@ bool bms_decode_real(const cJSON *msg, bms_sample_t *s, char *err, size_t err_le
         if (!json_int(c, &v)) {
             return fail(err, err_len, "bad cell value");
         }
-        if (v == NO_CELL) {
+        if (v == NO_CELL || v == -1) {
             continue;
+        }
+        if (v <= 0 || v >= 60000) {
+            return fail(err, err_len, "implausible cell voltage");
         }
         if (s->n_cells == BMS_MAX_CELLS) {
             return fail(err, err_len, "too many cells");
@@ -160,15 +171,31 @@ bool bms_decode_real(const cJSON *msg, bms_sample_t *s, char *err, size_t err_le
         s->temps[s->n_temps++] = v / 10.0f;
     }
 
-    int64_t warn = 0, fault = 0;
-    const cJSON *w = cJSON_GetObjectItemCaseSensitive(msg, "Bwarn");
-    const cJSON *f = cJSON_GetObjectItemCaseSensitive(msg, "Bfault");
-    if ((w && !json_int(w, &warn)) || (f && !json_int(f, &fault))) {
-        return fail(err, err_len, "bad Bwarn/Bfault");
+    // Flags: BBwarn/BBfault are this pack's; Bwarn/Bfault are the bank's (OR of all packs).
+    int64_t flags[4] = {0};
+    static const char *const keys[4] = {"BBwarn", "BBfault", "Bwarn", "Bfault"};
+    for (int i = 0; i < 4; i++) {
+        const cJSON *item = cJSON_GetObjectItemCaseSensitive(msg, keys[i]);
+        if (item && !json_int(item, &flags[i])) {
+            return fail(err, err_len, "bad warning/fault word");
+        }
     }
-    s->warn = (uint32_t)warn;
-    s->fault = (uint32_t)fault;
-    s->problem = warn + fault;
+    s->warn = (uint32_t)flags[0];
+    s->fault = (uint32_t)flags[1];
+    s->bank_warn = (uint32_t)flags[2];
+    s->bank_fault = (uint32_t)flags[3];
+    s->problem = flags[2] + flags[3];
+
+    // This pack's limits: BLVolCu = [[charge V, discharge V], [charge A, discharge A]], 0.1 units.
+    int64_t cv, dv, ci, di;
+    if (field(msg, "BLVolCu", 0, 0, &cv) && field(msg, "BLVolCu", 0, 1, &dv) &&
+        field(msg, "BLVolCu", 1, 0, &ci) && field(msg, "BLVolCu", 1, 1, &di)) {
+        s->have_limits = true;
+        s->charge_v_limit = cv / 10.0f;
+        s->discharge_v_limit = dv / 10.0f;
+        s->charge_i_limit = ci / 10.0f;
+        s->discharge_i_limit = di / 10.0f;
+    }
     return true;
 }
 
@@ -189,5 +216,6 @@ void bms_decode_basic(const cJSON *msg, bms_info_t *out)
     copy_field(msg, "DevSN", out->serial, sizeof(out->serial));
     copy_field(msg, "version", out->sw, sizeof(out->sw));
     copy_field(msg, "M1SwVer", out->fw, sizeof(out->fw));
+    copy_field(msg, "M2SwVer", out->iap, sizeof(out->iap));
     copy_field(msg, "Type", out->model, sizeof(out->model));
 }

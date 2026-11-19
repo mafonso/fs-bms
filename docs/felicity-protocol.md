@@ -1,8 +1,11 @@
 # Felicity Solar BMS BLE protocol
 
-Reference for the Bluetooth LE interface of Felicity Solar LiFePO4 battery BMSes (16-cell, 48 V packs
-such as the FLB48 series), as implemented in `main/features/bms_proto.c` (framing and decoding) and
+Reference for the Bluetooth LE interface of Felicity Solar LiFePO4 batteries (16S, 48 V packs such as
+the FLB48 series), as implemented in `main/features/bms_proto.c` (framing and decoding) and
 `main/features/bms.c` (BLE session).
+
+Each pack has its own BLE radio. Packs can be wired in parallel as a bank; every pack then reports its
+own measurements plus a copy of the bank's aggregates.
 
 ## Discovery
 
@@ -11,40 +14,41 @@ such as the FLB48 series), as implemented in `main/features/bms_proto.c` (framin
 | Local name | `F07` or `F10` followed by the 18-digit serial number |
 | Address | public |
 | Manufacturer ID | `0xfffe` |
-| Connectable | yes, one central at a time |
+| Connections | one central at a time |
 
 ## GATT
 
-| UUID | Handle | Properties | |
+| UUID | Handle¹ | Properties | |
 |---|---|---|---|
 | `6e6f736a-4643-4d44-8fa9-0fafd005e455` | | | service |
 | `49535258-184d-4bd9-bc61-20c647249616` | `0x0011` | write without response | TX: commands |
 | `49535458-8341-43f4-a9d4-ec0e34729bb3` | `0x000e` | notify (CCCD `0x000f`) | RX: replies |
 
-Handles are from BMS firmware 2.15 and may differ on other versions; discover them by UUID.
+¹ Seen with firmware 2.15; discover by UUID.
 
-The BMS sends an ATT Exchange MTU request (MTU 247) right after connecting. The central must answer
+The BMS sends an ATT Exchange MTU request (MTU 247) right after connecting; the central must answer
 it. Commands are 25–37 bytes, so they need an MTU above the default 23.
 
 ## Pairing
 
-The BMS requires an authenticated, encrypted link before it accepts a subscription to RX. Without
-it, writing the RX CCCD fails with ATT error `0x05` (Insufficient Authentication).
+The BMS accepts a subscription to RX only over an authenticated, encrypted link. Without one,
+writing the RX CCCD fails with ATT error `0x05` (Insufficient Authentication).
 
 | | |
 |---|---|
 | Security Request from the BMS | AuthReq `0x0D`: bonding, MITM, Secure Connections |
 | BMS IO capability | DisplayOnly |
-| Method | Passkey entry: the central enters the BMS's fixed 6-digit passkey |
-| Just Works | rejected with SMP Pairing Failed `0x03` (Authentication Requirements) |
+| Method | passkey entry: the central (KeyboardOnly) enters the BMS's fixed passkey |
+| Default passkey | `123456` |
+| Just Works | rejected: SMP Pairing Failed `0x03` (Authentication Requirements) |
 | Wrong passkey | SMP Pairing Failed `0x04` (Confirm Value Failed) |
 
-The passkey is not printed on the battery's labels. After bonding, later connections only need to
-re-encrypt with the stored keys.
+After bonding, later connections re-encrypt with the stored keys. A BLE proxy that cannot bond (such
+as an ESPHome Bluetooth proxy) cannot read the BMS.
 
 ## Commands
 
-Plain ASCII, written to TX:
+Plain ASCII, written to TX. One command at a time; wait for its reply before sending the next.
 
 | Command | Reply |
 |---|---|
@@ -58,66 +62,104 @@ Each reply is one JSON object split over several notifications. A notification t
 starts a frame. Append notifications until one ends with `}` and the buffer parses as JSON; a `}`
 that closes a nested object can also end a notification.
 
-Every reply has `"CommVer": 1`.
+Every reply has `"CommVer": 1`. Values are integers, sometimes encoded as JSON strings, within
+±`0xFFFFFFFF`.
 
-Values are integers, sometimes encoded as JSON strings, within ±`0xFFFFFFFF`. Arrays are padded
-with `65535` (`0xFFFF`) in unused slots.
+| Value | Meaning |
+|---|---|
+| `65535`, `-1` | empty slot (the other pack's position in a per-pack array, or an absent version field) |
+| `32767` | temperature probe not fitted |
+| `null` | unused |
 
-## Live data
+Right after a connection the BMS can answer with a well-formed frame whose values are all still zero
+(0 V, 0 %, 0 °C). Discard frames whose pack voltage is outside 10–70 V and ask again.
 
-Example reply: `test/fixtures/real.json` (serial numbers zeroed).
+## Common fields
+
+Present in every reply.
+
+| Field | Meaning |
+|---|---|
+| `CommVer` | protocol version, `1` |
+| `wifiSN` | `F` + serial number |
+| `DevSN` | serial number (18 digits) |
+| `modID` | the pack's index within the bank (`1`, `2`, …) |
+| `Type`, `SubType` | model codes (e.g. `112`, `7300`) |
+
+## Live data: `get dev real infor`
+
+Example: `test/fixtures/real.json` (serial numbers zeroed). Arrays indexed `[row][0]` hold this pack's
+value; `[row][1]` is the other pack's slot and reads `65535` or `-1`.
+
+### This pack
 
 | Value | Field | Scale | Example |
 |---|---|---|---|
 | Pack voltage | `BattList[0][0]` | mV | `52230` → 52.23 V |
-| Current | `BattList[1][0]` | 0.1 A, signed; negative while discharging | `-201` → −20.1 A |
+| Current | `BattList[1][0]` | 0.1 A, signed; negative = discharging | `-201` → −20.1 A |
 | State of charge | `BatsocList[0][0]` | 0.01 % | `6000` → 60 % |
-| Full capacity | `BatsocList[0][2]` | mAh | `300000` → 300 Ah |
-| Remaining charge | `BatsocList[0][0] × BatsocList[0][2] / 10⁷` | Ah | 180 Ah |
-| Cell voltages | `BatcelList[0][0..15]` | mV | 16 cells, `3271`, `3260`, … |
-| Temperatures | `BtemList[0][0..7]` | 0.1 °C, signed; `32767` = no sensor | 4 sensors, `250` → 25.0 °C |
-| Warning flags | `Bwarn` | bit field, 0 = none | |
-| Fault flags | `Bfault` | bit field, 0 = none | |
+| Cell voltages | `BatcelList[0][0..15]` | mV | `3271`, `3260`, … |
 | Highest / lowest cell | `BMaxMin` | `[[max mV, min mV], [max index, min index]]`, 0-based | `[[3271,3255],[0,11]]` |
+| Temperatures | `BtemList[0][0..7]` | 0.1 °C, signed; 4 probes fitted, `32767` = none | `250` → 25.0 °C |
+| Charge voltage limit | `BLVolCu[0][0]` | 0.1 V | `576` → 57.6 V (3.6 V/cell) |
+| Discharge voltage limit | `BLVolCu[0][1]` | 0.1 V | `480` → 48.0 V (3.0 V/cell) |
+| Charge current limit | `BLVolCu[1][0]` | 0.1 A; drops to 0 when full | `1500` → 150 A |
+| Discharge current limit | `BLVolCu[1][1]` | 0.1 A | `1500` → 150 A |
+| Warning word | `BBwarn` | bit field, 0 = none | `4` at top of charge when one cell runs ahead |
+| Fault word | `BBfault` | bit field, 0 = none | |
 | BMS clock | `date` | `YYYYMMDDhhmmss`, local time | |
-| Serial number | `DevSN`, `wifiSN` (`F` + serial) | | |
 
-`BatcelList[1]` and the unused slots of `BattList` are all `65535`.
+`BatcelList[1]` (the other pack's cells) is all `65535`.
 
-### Other fields
+### Bank
 
-These fields are present, but their meaning is not documented. The interpretations below are
-inferred from the values and are unverified.
+Every pack in a parallel bank reports the same values for these fields. With a single pack they
+equal the pack's own values.
 
-| Field | Example | Likely meaning |
+| Value | Field | Scale |
 |---|---|---|
-| `Batt` | `[[52200],[-203],[null]]` | voltage (mV) and current (0.1 A), rounded |
-| `Batsoc` | `[[6000,1000,300000]]` | same as `BatsocList`; `[0][1]` may be state of health in 0.1 % |
-| `LVolCur`, `BLVolCu` | `[[576,480],[1500,1500]]` | charge voltage limit and discharge cut-off (0.1 V); charge and discharge current limits (0.1 A) |
-| `BTemp` | `[[250,240],[256,257]]` | highest and lowest temperature (0.1 °C); second row unknown |
-| `Templist` | `[[250,240],[0,1],[65535,65535],[65535,65535]]` | highest and lowest temperature, and their sensor indexes |
-| `Estate`, `Bstate` | `5056` | state bit field |
-| `EMSpara`, `BMSpara` | `[[1,2]]` | unknown |
-| `BBfault`, `BBwarn` | `0` | secondary fault and warning flags |
-| `workM`, `HtCuSt` | `0` | operating mode; heater state |
-| `modID`, `Type`, `SubType` | `1`, `112`, `7300` | module ID, device type and subtype |
+| Bank voltage | `Batt[0][0]` | mV |
+| Bank current | `Batt[1][0]` | 0.1 A, sum of all packs |
+| Bank state of charge | `Batsoc[0][0]` | 0.01 % |
+| Bank voltage limits | `LVolCur[0][0]`, `[0][1]` | 0.1 V (charge, discharge) |
+| Bank current limits | `LVolCur[1][0]`, `[1][1]` | 0.1 A, sum of all packs (charge, discharge) |
+| Bank warning word | `Bwarn` | OR of all packs' `BBwarn` |
+| Bank fault word | `Bfault` | OR of all packs' `BBfault` |
 
-## Device information
+The field names do not indicate the scope: `BattList` is per pack and `Batt` is the bank, while
+`BLVolCu` is per pack and `LVolCur` is the bank.
 
-Example reply: `test/fixtures/basic.txt`.
+### Partly decoded
+
+| Field | Example | Meaning |
+|---|---|---|
+| `BatsocList[0][1]`, `Batsoc[0][1]` | `1000` | likely state of health, 0.1 % |
+| `BatsocList[0][2]` | `300000` | capacity in mAh; does not always match the nameplate (a 314 Ah pack reports `350000`). `Batsoc[0][2]` is the bank total |
+| `BTemp[0]` | `[250,240]` | highest and lowest pack temperature, 0.1 °C |
+| `BTemp[1]` | `[256,257]` | unknown; takes a few discrete values (`256`, `257`, `259`, `512`, `513`) |
+| `Templist` | `[[250,240],[0,1],[65535,65535],[65535,65535]]` | four two-value groups; group 0 is the highest/lowest probe temperature |
+| `Estate`, `Bstate` | `5056` | bank and pack state bit fields |
+| `workM` | `0` | work mode |
+| `HtCuSt` | `0` | heater current state (`0` = not heating) |
+| `EMSpara`, `BMSpara` | `[[1,2]]` | configuration pair; the second value may be the heater request current (A) |
+
+## Device information: `get dev basice infor`
+
+Example: `test/fixtures/basic.txt`.
 
 | Field | Meaning | Example |
 |---|---|---|
-| `DevSN` | serial number | 18 digits |
-| `version` | software version | `"2.15"` |
-| `M1SwVer`, `M2SwVer` | firmware versions | `524`, `5` |
-| `Type`, `SubType` | device type | `112`, `7300` |
-
-Also present: `wifiSN`, `COM`, `iotType`, `modID`, `DSwVer`, `DHwVer`, `CtHwVer`, `PwHwVer`,
-`BDsVer`, `RD`, `RDT`.
+| `version` | Wi-Fi/BLE module firmware ("Version" in the FSolar app) | `"2.15"` |
+| `M1SwVer` | BMS firmware ("Master Version") | `524` |
+| `M2SwVer` | bootloader firmware ("IAP Version") | `5` |
+| `DSwVer` | display firmware, `65535` = no display | `65535` |
+| `DHwVer`, `CtHwVer`, `PwHwVer`, `BDsVer` | hardware/board versions, `65535` = absent | |
+| `COM`, `iotType`, `RD`, `RDT` | unknown | `3`, `3`, `1`, `18` |
 
 ## Credits
 
-The command set and the core field layout were first published in
-[aiobmsble](https://github.com/patman15/aiobmsble) (`aiobmsble/bms/felicity_bms.py`, Apache-2.0),
-which `bms_proto.c` is ported from.
+The command set and core field layout were first published in
+[aiobmsble](https://github.com/patman15/aiobmsble) (`aiobmsble/bms/felicity_bms.py`), which
+`bms_proto.c` is ported from. The per-pack/bank split, the limits and the app version names follow
+[esphome-felicity-bms](https://github.com/andrein/esphome-felicity-bms) (`PROTOCOL.md`). Both are
+Apache-2.0.

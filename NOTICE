@@ -1,0 +1,9 @@
+fs-bms
+Licensed under the Apache License, Version 2.0 (see LICENSE).
+
+main/features/bms_proto.c and main/features/bms_proto.h are ported from
+aiobmsble (https://github.com/patman15/aiobmsble), aiobmsble/bms/felicity_bms.py,
+licensed under the Apache License, Version 2.0.
+
+test/test_bms_proto.c contains sample replies taken from aiobmsble's tests
+(tests/bms/test_felicity_bms.py), under the same license.

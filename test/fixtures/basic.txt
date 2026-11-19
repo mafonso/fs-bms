@@ -1,0 +1,1 @@
+{"CommVer":1,"version":"2.15","wifiSN":"F100000000000000000","COM":3,"iotType":3,"modID":1,"DevSN":"100000000000000000","Type":112,"SubType":7300,"DSwVer":65535,"M1SwVer":524,"M2SwVer":5,"DHwVer":0,"CtHwVer":0,"PwHwVer":65535,"BDsVer":65535,"RD":1,"RDT":18}

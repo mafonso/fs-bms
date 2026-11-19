@@ -1,0 +1,58 @@
+CONFIG_IDF_TARGET="esp32s3"
+
+# ESP32-S3 N16R8: 16 MB quad flash, 8 MB octal PSRAM
+CONFIG_ESPTOOLPY_FLASHSIZE_16MB=y
+CONFIG_SPIRAM=y
+CONFIG_SPIRAM_MODE_OCT=y
+CONFIG_SPIRAM_IGNORE_NOTFOUND=y
+
+# Two 6 MB OTA slots
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
+
+# A new image must confirm itself (Wi-Fi up) or the bootloader rolls back
+CONFIG_BOOTLOADER_APP_ROLLBACK_ENABLE=y
+
+# Console + setup menu on the native USB port
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+
+CONFIG_ESP_MAIN_TASK_STACK_SIZE=6144
+CONFIG_HTTPD_MAX_REQ_HDR_LEN=1024
+
+# WebSocket hub at /ws (core/web_ws.c). Existing build dirs: delete sdkconfig
+# so this applies, or the build stops with an #error.
+CONFIG_HTTPD_WS_SUPPORT=y
+# Room for 16 browser connections (web.c WEB_MAX_SOCKETS) + 3 httpd-internal + mDNS/OTA
+CONFIG_LWIP_MAX_SOCKETS=20
+# Connections waiting for accept() during a page load burst (default 6)
+CONFIG_LWIP_TCP_ACCEPTMBOX_SIZE=16
+# TCP PCBs, which also hold closed connections in TIME_WAIT (2 min) and FIN_WAIT. At the
+# default 16 they run out under a few browsers, and new connections are aborted
+# before accept ("error in accept (113)", ECONNABORTED).
+CONFIG_LWIP_MAX_ACTIVE_TCP=32
+# A whole response (largest page file is ~15 KB) fits in the send buffer, so the
+# single-threaded HTTP server hands it to TCP and moves on instead of waiting for
+# a slow client's ACKs. Wi-Fi/LWIP buffers go to PSRAM to keep internal RAM free.
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=16384
+CONFIG_SPIRAM_TRY_ALLOCATE_WIFI_LWIP=y
+
+# Full speed; the board is USB powered
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_240=y
+
+# The web log hook (core/logbuf.c) formats each line on the logging task's stack;
+# give the default event loop, which logs Wi-Fi/IP events, some headroom.
+CONFIG_ESP_SYSTEM_EVENT_TASK_STACK_SIZE=3584
+
+# BLE central (NimBLE) for the BMS link (features/bms.c). One connection; host
+# memory goes to PSRAM. The peripheral role stays enabled because it brings the
+# ATT server: the BMS sends its own MTU request, which must be answered (the
+# board never advertises). The BMS requires passkey pairing (`bms pin`) before
+# it accepts notifications; the bond is kept in NVS.
+CONFIG_BT_ENABLED=y
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_MAX_CONNECTIONS=1
+CONFIG_BT_NIMBLE_SECURITY_ENABLE=y
+CONFIG_BT_NIMBLE_NVS_PERSIST=y
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_EXTERNAL=y
+CONFIG_BT_NIMBLE_LOG_LEVEL_WARNING=y
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247

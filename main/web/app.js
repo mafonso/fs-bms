@@ -28,12 +28,14 @@
 //                                      `wide: true` = 3); phones show one column
 //   App.settings({id, title, category, order, mount(el, ctx), save, reset})
 //                                      a section on the Settings page, under one of the
-//                                      CATEGORIES below (default 'features'). Editable sections
+//                                      CATEGORIES below (default 'battery'). Editable sections
 //                                      call ctx.dirty(true) when edited; Save then awaits
 //                                      save() of every dirty section and closes the page
 //                                      (a throw keeps it open and shows the message);
 //                                      Cancel/close call reset(). Optional show()/hide()
 //                                      run when the section's category is shown/left.
+//   App.notice(content, cls)          a message above the main page's cards until replaced;
+//                                      content is text or a Node, null clears; cls 'ok'/'warn'
 //   App.connected, App.info (last /api/info), App.fmt (kb, mb, duration)
 
 import coreSettings from '/settings.js';
@@ -45,12 +47,12 @@ const sections = [];
 
 // Settings categories, in menu order. Keep them few: a section picks one with `category`.
 const CATEGORIES = [
-  { id: 'system', title: 'System', hint: 'Firmware version and updates, hardware, health and the live log.' },
+  { id: 'battery', title: 'Battery', hint: 'Which battery the board reads, how it pairs and how often it polls.' },
   { id: 'network', title: 'Network', hint: 'How the board joins Wi-Fi and the name it has on the network.' },
-  { id: 'features', title: 'Features', hint: 'Options for the features on the main page.' },
+  { id: 'system', title: 'System', hint: 'Firmware version and updates, hardware, health and the live log.' },
   { id: 'security', title: 'Security', hint: 'Who may change settings, install updates or reboot the board.' },
 ];
-const DEFAULT_CATEGORY = 'features';
+const DEFAULT_CATEGORY = 'battery';
 let ws = null;
 let retryMs = 1000;
 let cardsReady = false;
@@ -201,6 +203,11 @@ export const App = {
     renderSections();
   },
 
+  notice(content, cls = '') {
+    notice = content == null ? null : { content, cls };
+    showNotice();
+  },
+
   fmt: {
     kb: b => Math.round(b / 1024) + ' KB',
     mb: b => (b / 1048576).toFixed(b >= 10485760 ? 0 : 1) + ' MB',
@@ -212,6 +219,29 @@ export const App = {
 };
 
 // ---- Header ----
+
+let notice = null;      // App.notice()
+let setupRouted = false;
+
+// The notice line: App.notice()'s message, else a pointer to Wi-Fi setup while this
+// page is open over the board's setup hotspot.
+function showNotice() {
+  const el = $('notice'), w = App.info && App.info.wifi;
+  el.replaceChildren();
+  el.className = 'notice';
+  if (notice) {
+    el.append(notice.content);
+    if (notice.cls) el.classList.add(notice.cls);
+  } else if (w && w.via_setup_ap) {
+    const a = document.createElement('a');
+    a.href = '#/settings/network';
+    a.textContent = 'Set up Wi-Fi';
+    el.append(w.connected
+      ? `You are on the board's setup hotspot. The board is also on '${w.ssid}' at ${w.ip}. `
+      : 'You are on the board\'s setup hotspot: it is not on a Wi-Fi network yet. ', a);
+  }
+  el.hidden = !el.childNodes.length || currentPath() === '/settings';
+}
 
 function showHeader() {
   const w = App.info && App.info.wifi;
@@ -227,6 +257,13 @@ function showHeader() {
 async function refreshInfo() {
   try { App.info = await App.api('/api/info'); } catch (e) { }
   showHeader();
+  showNotice();
+  // Opened over the setup hotspot with no network to join: go straight to Wi-Fi setup.
+  const w = App.info && App.info.wifi;
+  if (w && w.via_setup_ap && !w.configured && !setupRouted && currentPath() === '/') {
+    location.hash = '#/settings/network';
+  }
+  if (w) setupRouted = true;
 }
 
 // ---- WebSocket ----
@@ -342,7 +379,12 @@ const settingsPage = {
     }
     renderSections();
   },
-  show() { showCategory(categoryFromHash()); },
+  // auto: no category was asked for (bare #/settings, none chosen before), so the page may move to
+  // an earlier category once a late-loading feature module registers a section there.
+  show() {
+    const asked = location.hash.startsWith('#/settings/') || settingsPage.last;
+    showCategory(categoryFromHash(), !asked);
+  },
   hide() { showCategory(null); },
 };
 
@@ -353,11 +395,12 @@ function categoryFromHash() {
 }
 
 // Shows one category (null: none) and runs hide()/show() of the sections it leaves/enters.
-function showCategory(id) {
+function showCategory(id, auto = false) {
   const prev = settingsPage.cat;
+  settingsPage.auto = auto;
   if (id === prev) return;
   settingsPage.cat = id;
-  if (id) settingsPage.last = id;
+  if (id && !auto) settingsPage.last = id;
   for (const s of sections) if (s.el && s.cat === prev) s.hide?.();
   for (const c of CATEGORIES) {
     settingsPage.panes[c.id].hidden = c.id !== id;
@@ -391,6 +434,10 @@ function renderSections() {
     settingsPage.tabs[s.cat].hidden = false;
     // Registered while its category is on screen (feature modules load late).
     if (fresh && s.cat === settingsPage.cat) s.show?.();
+  }
+  if (settingsPage.cat && settingsPage.auto) {
+    const first = CATEGORIES.find(c => sections.some(s => s.cat === c.id))?.id;
+    if (first && first !== settingsPage.cat) showCategory(first, true);
   }
 }
 
@@ -487,6 +534,7 @@ function route() {
   $('hdr-main').hidden = path === '/settings';
   $('hdr-settings').hidden = path !== '/settings';
   shown = path;
+  showNotice();
   updateSaveBar();
   window.scrollTo(0, 0);
 }

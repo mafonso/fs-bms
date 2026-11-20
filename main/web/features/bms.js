@@ -1,7 +1,7 @@
 // Battery card (the home page's main card): live data from main/features/bms.c on
 // WebSocket topic 'bms' (sent after every poll), history charts from
 // GET /api/bms/history, and the Settings section (poll interval, pinned
-// address, pairing passkey, pause for the FSolar app).
+// address, pairing passkey, pause for the FSolar app) under Settings → Battery.
 import { lineChart } from '/chart.js';
 
 const CSS = `
@@ -69,7 +69,8 @@ export default function (App) {
           <div><h3>Power (W, + charging)</h3><div data-k="c-pw"></div></div>
           <div><h3>Cell delta (mV)</h3><div data-k="c-dm"></div></div>
         </div>
-        <div class="bms-st"><span class="dot" data-k="dot"></span><span data-k="state">waiting for first poll</span></div>`;
+        <div class="bms-st"><span class="dot" data-k="dot"></span><span data-k="state">waiting for first poll</span></div>
+        <div class="bms-st" data-k="pickhint" hidden>No battery in range. <a href="#/settings/battery">Choose a battery</a></div>`;
       const $ = k => el.querySelector(`[data-k="${k}"]`);
 
       const LEN = 240;
@@ -100,6 +101,8 @@ export default function (App) {
         const st = d.state === 'paused' ? `paused for ${Math.ceil(d.paused_s / 60)} min`
           : d.ok ? `updated ${s ? s.age_s : '?'} s ago, every ${d.interval_s} s` : (d.error || d.state);
         $('state').textContent = [st, who].filter(Boolean).join(' · ');
+        const lost = !d.ok && /no BMS found/.test(d.error || '');
+        $('pickhint').hidden = !lost;
         if (!s) return;
         $('soc').textContent = f(s.soc, 0);
         $('bar').style.width = Math.max(0, Math.min(100, s.soc)) + '%';
@@ -139,46 +142,102 @@ export default function (App) {
     },
   });
 
-  let stored = {}, root = null;   // not this.el: app.js keeps the section's own element there
+  // Settings → Battery → Connection. The battery list comes from POST /api/bms/scan (an 8 s
+  // BLE search the board runs between polls), polled through GET /api/bms/scan.
+  let stored = {}, root = null, ctxRef = null;   // not this.el: app.js keeps the section's own element there
+  let sel = '';             // chosen address; '' = automatic
+  let found = [];           // last search results
   const $s = k => root.querySelector(`[data-k="${k}"]`);
+  const esc = t => String(t).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+
+  function renderPicker() {
+    const rows = [{ addr: '', label: 'Automatic', sub: 'the first battery named F07…/F10… in range' }];
+    for (const r of found) {
+      const tags = [r.in_use && 'in use'].filter(Boolean).join(', ');
+      rows.push({ addr: r.addr, label: r.name || r.addr, sub: `${r.addr} · ${r.rssi} dBm${tags ? ' · ' + tags : ''}` });
+    }
+    if (sel && !found.some(r => r.addr === sel)) {
+      rows.push({ addr: sel, label: sel, sub: 'saved; not seen in the last search' });
+    }
+    $s('pick').innerHTML = rows.map(r => `
+      <label class="bms-pick"><input type="radio" name="bms-pick" value="${esc(r.addr)}"${r.addr === sel ? ' checked' : ''}>
+        <span><b>${esc(r.label)}</b><small>${esc(r.sub)}</small></span></label>`).join('');
+    $s('pick').querySelectorAll('input').forEach(i => i.onchange = () => { sel = i.value; ctxRef.dirty(true); });
+  }
+
+  async function search() {
+    const btn = $s('find'), msg = $s('find-msg');
+    btn.disabled = true;
+    msg.className = 'hint';
+    msg.textContent = 'Searching for 8 s…';
+    try {
+      let r = await App.api('/api/bms/scan', { method: 'POST', body: {} });
+      for (let i = 0; i < 20 && r.state !== 'done'; i++) {
+        await new Promise(res => setTimeout(res, 1000));
+        r = await App.api('/api/bms/scan');
+      }
+      found = r.results || [];
+      msg.textContent = found.length ? `Found ${found.length}.`
+        : 'No battery found. Is it in range, and is the FSolar app disconnected from it?';
+      renderPicker();
+    } catch (e) {
+      msg.className = 'msg err';
+      msg.textContent = e.message;
+    } finally {
+      btn.disabled = false;
+    }
+  }
+
   App.settings({
-    id: 'bms', title: 'Battery BMS', order: 10,
+    id: 'bms', title: 'Connection', category: 'battery', order: 10,
     mount(el, ctx) {
       el.innerHTML = `
-        <label>Poll interval (seconds, 10–3600)<input data-k="interval" type="number" min="10" max="3600"></label>
-        <label>BMS address (empty: first pack named F07*/F10*)<input data-k="addr" placeholder="AA:BB:CC:DD:EE:FF"></label>
+        <style>
+          .bms-pick { display: flex; gap: 10px; align-items: flex-start; margin-top: 8px; padding: 8px 10px;
+            border: 1px solid var(--line); border-radius: 8px; color: var(--text); font-size: 15px; cursor: pointer; }
+          .bms-pick input { width: auto; margin-top: 3px; }
+          .bms-pick small { display: block; color: var(--muted); font-size: 12px; }
+        </style>
+        <label style="margin-top:0">Battery</label>
+        <div data-k="pick"></div>
+        <div class="row"><button data-k="find">Find batteries</button><span class="hint" data-k="find-msg" style="margin:0"></span></div>
         <label>Pairing passkey<input data-k="pin" inputmode="numeric" autocomplete="off" placeholder=""></label>
         <p class="hint">Leave empty to keep the current passkey. Felicity's default is 123456. A passkey you set is stored on the board and never shown again.</p>
+        <label>Poll interval (seconds, 10–3600)<input data-k="interval" type="number" min="10" max="3600"></label>
         <div class="row"><button data-k="pause">Pause 15 min for the FSolar app</button><button data-k="poll">Poll now</button></div>
         <div class="msg" data-k="msg"></div>`;
-      const $ = k => el.querySelector(`[data-k="${k}"]`);
-      for (const k of ['interval', 'addr', 'pin']) $(k).oninput = () => ctx.dirty(true);
-      const act = async (body, text) => {
-        try { await App.api('/api/bms', { method: 'POST', body }); $('msg').className = 'msg ok'; $('msg').textContent = text; }
-        catch (e) { $('msg').className = 'msg err'; $('msg').textContent = e.message; }
-      };
-      $('pause').onclick = () => act({ pause_min: 15 }, 'Paused for 15 minutes');
-      $('poll').onclick = () => act({ poll: true }, 'Polling');
       root = el;
+      ctxRef = ctx;
+      for (const k of ['interval', 'pin']) $s(k).oninput = () => ctx.dirty(true);
+      const act = async (body, text) => {
+        try { await App.api('/api/bms', { method: 'POST', body }); $s('msg').className = 'msg ok'; $s('msg').textContent = text; }
+        catch (e) { $s('msg').className = 'msg err'; $s('msg').textContent = e.message; }
+      };
+      $s('pause').onclick = () => act({ pause_min: 15 }, 'Paused for 15 minutes');
+      $s('poll').onclick = () => act({ poll: true }, 'Polling');
+      $s('find').onclick = search;
+      renderPicker();
     },
     async show() {
-      const d = await App.api('/api/bms');
-      stored = d;
+      stored = await App.api('/api/bms');
+      // Results of an earlier search, if any; otherwise the battery in use.
+      const r = await App.api('/api/bms/scan').catch(() => ({ results: [] }));
+      found = r.results?.length ? r.results
+        : stored.addr ? [{ addr: stored.addr, name: stored.name, rssi: stored.sample?.rssi ?? 0, in_use: true }] : [];
       this.reset();
     },
     reset() {
-      const $ = $s;
-      $('interval').value = stored.interval_s ?? 30;
-      $('addr').value = stored.pinned_addr ?? '';
-      $('pin').value = '';
-      $('pin').placeholder = stored.pin_set ? 'custom passkey set' : 'default (123456)';
+      sel = stored.pinned_addr ?? '';
+      renderPicker();
+      $s('interval').value = stored.interval_s ?? 30;
+      $s('pin').value = '';
+      $s('pin').placeholder = stored.pin_set ? 'custom passkey set' : 'default (123456)';
     },
     async save() {
-      const $ = $s;
-      const body = { interval_s: Number($('interval').value) };
-      // Only when changed: a new address makes the board forget the pack and scan again.
-      if ($('addr').value.trim() !== (stored.pinned_addr ?? '')) body.addr = $('addr').value.trim();
-      if ($('pin').value.trim()) body.pin = $('pin').value.trim();
+      const body = { interval_s: Number($s('interval').value) };
+      // Only when changed: a new address makes the board forget the battery and connect afresh.
+      if (sel !== (stored.pinned_addr ?? '')) body.addr = sel;
+      if ($s('pin').value.trim()) body.pin = $s('pin').value.trim();
       stored = await App.api('/api/bms', { method: 'POST', body });
     },
   });

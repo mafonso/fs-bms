@@ -37,6 +37,8 @@ static const char *TAG = "bms";
 void ble_store_config_init(void);   // NimBLE provides it but no header declares it
 
 #define SCAN_MS        15000
+#define FIND_MS        8000     // `bms scan` / Settings → Find batteries
+#define FIND_MAX       8
 #define CONNECT_MS     10000
 #define OP_MS          5000
 #define FRAME_MS       8000
@@ -67,6 +69,14 @@ static bool s_pinned;
 static ble_addr_t s_peer;           // last BMS found; reused until a connect fails
 static bool s_have_peer;
 static bool s_found;
+static volatile bool s_collect;     // find mode: list every BMS instead of stopping at the first
+typedef struct {
+    ble_addr_t addr;
+    char name[32];
+    int8_t rssi;
+} found_t;
+static found_t s_finds[FIND_MAX];   // under s_lock
+static int s_find_n;
 static char s_found_name[32];
 static uint16_t s_svc_start, s_svc_end, s_tx_handle, s_rx_handle, s_rx_end, s_cccd;
 static uint8_t s_tx_props;
@@ -102,6 +112,8 @@ static struct {
     int64_t paused_until_us;
     uint32_t raw_logged;
     bool addr_pending;              // set_addr() ran; bms_task applies new_pin between sessions
+    bool find_pending, finding;     // a find was asked for / is running
+    bool find_done;                 // s_finds holds the result of a finished find
     bool new_pinned;
     ble_addr_t new_pin;
 } s_st = {.state = "idle"};
@@ -188,9 +200,31 @@ static void on_chunk(const uint8_t *data, size_t len)
     }
 }
 
+// Find mode: add or refresh one BMS in s_finds.
+static void collect(const struct ble_gap_disc_desc *d, const char *name)
+{
+    lock();
+    int i = 0;
+    while (i < s_find_n && memcmp(s_finds[i].addr.val, d->addr.val, 6) != 0) {
+        i++;
+    }
+    if (i < FIND_MAX) {
+        if (i == s_find_n) {
+            s_find_n++;
+            s_finds[i].rssi = d->rssi;
+        }
+        s_finds[i].addr = d->addr;
+        snprintf(s_finds[i].name, sizeof(s_finds[i].name), "%s", name);
+        if (d->rssi > s_finds[i].rssi) {
+            s_finds[i].rssi = d->rssi;
+        }
+    }
+    unlock();
+}
+
 static void on_disc(const struct ble_gap_disc_desc *d)
 {
-    if (s_found) {
+    if (s_found && !s_collect) {
         return;
     }
     struct ble_hs_adv_fields f;
@@ -199,6 +233,12 @@ static void on_disc(const struct ble_gap_disc_desc *d)
         size_t n = f.name_len < sizeof(name) - 1 ? f.name_len : sizeof(name) - 1;
         memcpy(name, f.name, n);
         name[n] = '\0';
+    }
+    if (s_collect) {
+        if (name_matches(name, strlen(name))) {
+            collect(d, name);
+        }
+        return;
     }
     bool match = s_pinned ? !memcmp(d->addr.val, s_pin.val, 6) : name_matches(name, strlen(name));
     if (!match) {
@@ -396,6 +436,35 @@ static int wait_op(int rc, uint32_t ms)
     return (b & EV_DISCONNECT) ? BLE_HS_ENOTCONN : BLE_HS_ETIMEOUT;
 }
 #define OP(call, ms) (xEventGroupClearBits(s_ev, EV_OP), wait_op((call), (ms)))
+
+// List every BMS in range for FIND_MS (no connection is made).
+static void find(void)
+{
+    struct ble_gap_disc_params p = {.passive = 0, .filter_duplicates = 0};
+    lock();
+    s_find_n = 0;
+    s_st.finding = true;
+    s_st.find_done = false;
+    s_st.state = "searching";
+    unlock();
+    s_collect = true;
+    xEventGroupClearBits(s_ev, EV_SCAN_DONE);
+    int rc = ble_gap_disc(s_own_addr_type, FIND_MS, &p, gap_event, NULL);
+    if (rc == 0 && !(xEventGroupWaitBits(s_ev, EV_SCAN_DONE, pdTRUE, pdFALSE, pdMS_TO_TICKS(FIND_MS + 2000)) &
+                     EV_SCAN_DONE)) {
+        ble_gap_disc_cancel();
+    }
+    s_collect = false;
+    if (rc != 0) {
+        ESP_LOGW(TAG, "search failed to start (%d)", rc);
+    }
+    lock();
+    s_st.finding = false;
+    s_st.find_done = true;
+    int n = s_find_n;
+    unlock();
+    ESP_LOGI(TAG, "search: %d BMS found", n);
+}
 
 static bool scan(void)
 {
@@ -728,7 +797,15 @@ static void bms_task(void *arg)
             s_st.have_info = false;
             s_st.name[0] = s_st.addr[0] = '\0';
         }
+        bool want_find = s_st.find_pending;
+        s_st.find_pending = false;
         unlock();
+        if (want_find) {
+            find();         // between sessions, so the radio is free; also while paused
+            if (paused > 0) {
+                continue;
+            }
+        }
         if (paused <= 0) {
             poll_once();
         }
@@ -941,6 +1018,70 @@ static esp_err_t api_get(httpd_req_t *req)
     return web_send_json(req, status_json());
 }
 
+// {state: "idle"|"searching"|"done", results: [{name, addr, rssi, pinned, in_use}]},
+// strongest first. pinned: the address saved in settings; in_use: the BMS last read.
+static cJSON *finds_json(void)
+{
+    char pinned[SETTINGS_BMS_ADDR_MAX];
+    settings_get_bms_addr(pinned);
+    cJSON *o = cJSON_CreateObject();
+    lock();
+    cJSON_AddStringToObject(o, "state", s_st.finding || s_st.find_pending ? "searching"
+                                        : s_st.find_done                  ? "done"
+                                                                          : "idle");
+    found_t list[FIND_MAX];
+    int n = s_find_n;
+    memcpy(list, s_finds, sizeof(list));
+    char in_use[18];
+    snprintf(in_use, sizeof(in_use), "%s", s_st.addr);
+    unlock();
+    for (int i = 1; i < n; i++) {   // insertion sort by RSSI, strongest first
+        for (int j = i; j > 0 && list[j].rssi > list[j - 1].rssi; j--) {
+            found_t t = list[j];
+            list[j] = list[j - 1];
+            list[j - 1] = t;
+        }
+    }
+    cJSON *arr = cJSON_AddArrayToObject(o, "results");
+    for (int i = 0; i < n; i++) {
+        char a[18];
+        addr_str(&list[i].addr, a);
+        cJSON *r = cJSON_CreateObject();
+        cJSON_AddStringToObject(r, "name", list[i].name);
+        cJSON_AddStringToObject(r, "addr", a);
+        cJSON_AddNumberToObject(r, "rssi", list[i].rssi);
+        cJSON_AddBoolToObject(r, "pinned", !strcmp(a, pinned));
+        cJSON_AddBoolToObject(r, "in_use", !strcmp(a, in_use));
+        cJSON_AddItemToArray(arr, r);
+    }
+    return o;
+}
+
+static void start_find(void)
+{
+    lock();
+    if (!s_st.finding) {
+        s_st.find_pending = true;
+    }
+    unlock();
+    xTaskNotifyGive(s_task);
+}
+
+static esp_err_t scan_get(httpd_req_t *req)
+{
+    return web_send_json(req, finds_json());
+}
+
+// Starts a search; poll GET /api/bms/scan for the result (it takes FIND_MS).
+static esp_err_t scan_post(httpd_req_t *req)
+{
+    if (!web_check_csrf(req)) {
+        return ESP_OK;
+    }
+    start_find();
+    return web_send_json(req, finds_json());
+}
+
 // {interval_s, soc: [...], power: [...], delta_mv: [...]}, oldest first.
 static esp_err_t history_get(httpd_req_t *req)
 {
@@ -1101,6 +1242,8 @@ static void bms_routes(httpd_handle_t server)
         {.uri = "/api/bms", .method = HTTP_POST, .handler = api_post},
         {.uri = "/api/bms/raw", .method = HTTP_GET, .handler = raw_get},
         {.uri = "/api/bms/history", .method = HTTP_GET, .handler = history_get},
+        {.uri = "/api/bms/scan", .method = HTTP_GET, .handler = scan_get},
+        {.uri = "/api/bms/scan", .method = HTTP_POST, .handler = scan_post},
     };
     web_register_routes(routes, sizeof(routes) / sizeof(routes[0]));
 }
@@ -1120,6 +1263,31 @@ static int cmd_bms(int argc, char **argv)
         printf("real:  %s\nbasic: %s\n", s_st.raw_real ? s_st.raw_real : "(none yet)",
                s_st.raw_basic ? s_st.raw_basic : "(none yet)");
         unlock();
+    } else if (!strcmp(sub, "scan")) {
+        printf("searching for %d s...\n", FIND_MS / 1000);
+        start_find();
+        vTaskDelay(pdMS_TO_TICKS(500));
+        for (int i = 0; i < (FIND_MS + 4000) / 250; i++) {
+            lock();
+            bool busy = s_st.finding || s_st.find_pending;
+            unlock();
+            if (!busy) {
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(250));
+        }
+        cJSON *o = finds_json();
+        const cJSON *r;
+        int n = 0;
+        cJSON_ArrayForEach(r, cJSON_GetObjectItem(o, "results")) {
+            printf("  %s  %s  %4d dBm%s%s\n", cJSON_GetObjectItem(r, "addr")->valuestring,
+                   cJSON_GetObjectItem(r, "name")->valuestring, cJSON_GetObjectItem(r, "rssi")->valueint,
+                   cJSON_IsTrue(cJSON_GetObjectItem(r, "pinned")) ? "  [pinned]" : "",
+                   cJSON_IsTrue(cJSON_GetObjectItem(r, "in_use")) ? "  [in use]" : "");
+            n++;
+        }
+        printf(n ? "pin one with: bms addr <address>\n" : "no BMS found (is another device connected to it?)\n");
+        cJSON_Delete(o);
     } else if (!strcmp(sub, "poll")) {
         poll_now();
         printf("polling\n");
@@ -1132,7 +1300,7 @@ static int cmd_bms(int argc, char **argv)
     } else if (!strcmp(sub, "pause") && argc == 3) {
         pause_for(atoi(argv[2]));
     } else {
-        printf("usage: bms [status|raw|poll|interval <s>|addr <AA:BB:CC:DD:EE:FF>|addr -|pin <passkey>|pin -|pause <min>]\n");
+        printf("usage: bms [status|raw|scan|poll|interval <s>|addr <AA:BB:CC:DD:EE:FF>|addr -|pin <passkey>|pin -|pause <min>]\n");
         return 1;
     }
     if (e) {
@@ -1146,7 +1314,7 @@ static void bms_console(void)
 {
     static const esp_console_cmd_t cmd = {
         .command = "bms",
-        .help = "Battery BMS: status | raw | poll | interval <s> | addr <mac>|- | pin <passkey>|- (default) | pause <min> (0 resumes)",
+        .help = "Battery BMS: status | raw | scan | poll | interval <s> | addr <mac>|- | pin <passkey>|- (default) | pause <min> (0 resumes)",
         .func = cmd_bms,
     };
     esp_console_cmd_register(&cmd);

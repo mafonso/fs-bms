@@ -9,6 +9,8 @@ static const char *TAG = "features";
 // `const feature_t name_feature` defined in features/name.c.
 #define FEATURE_LIST(X) \
     X(bms)              \
+    X(button)           \
+    X(factory_reset)    \
     X(sysinfo)          \
     X(temp)             \
     /* end of list */

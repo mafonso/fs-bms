@@ -50,6 +50,16 @@ idf.py flash monitor     # Ctrl-] quits monitor
 - Hangs that only some clients see: check the router's IPS log first. Some block clients that repeat
   `Authorization: Basic admin:…`, which is why the page uses a session token.
 - The board keeps Wi-Fi credentials, the BMS passkey and the BLE bond in NVS across flashes and OTA.
+- **Setup hotspot** (`wifi.c`, `captive_dns.c`): with no network saved, or the saved one unreachable for
+  `CONFIG_APP_SETUP_AP_AFTER_S` (180 s), the board also runs an access point named after its hostname at
+  `http://192.168.4.1/` with a captive-portal DNS. It goes off a minute after the station is back on
+  Wi-Fi. Console: `ap [on|off]`. BLE polling keeps running while it is on.
+- **Factory reset** (`features/factory_reset.c`) erases NVS and reboots: Settings → System, console
+  `factory-reset yes`, or hold BOOT for 10 s (`button.c` posts `APP_EVENT_BUTTON`). NVS also holds the
+  BMS settings and the NimBLE bond, so the board pairs with the battery again afterwards. Getting the
+  board back on Wi-Fi then needs a phone (or `sdkconfig.secrets` and a USB flash).
+- `main/core/` and the web shell are project-independent infrastructure; keep BMS-specific code in
+  `features/` and `web/features/`.
 
 ## Releasing
 
@@ -67,8 +77,8 @@ reach Wi-Fi within 60 s rolls back on its own.
 | Path | |
 |---|---|
 | `main/app_main.c` | boot order: settings → Wi-Fi → features init → web → feature routes → console → OTA confirm |
-| `main/core/` | shared infrastructure: `wifi`, `settings` (NVS), `auth` (admin password), `logbuf` (log ring buffer), `ota`, `web` (HTTP + static files), `web_settings` (settings/admin API), `web_ws` (WebSocket hub), `console_cmds`, `app_events` |
-| `main/features/` | one `.c` per feature, plus the registry `features.c`: `bms` (+ `bms_proto`), `sysinfo`, `temp` |
+| `main/core/` | shared infrastructure: `wifi` (station + setup hotspot), `captive_dns`, `settings` (NVS), `auth` (admin password), `logbuf` (log ring buffer), `ota`, `web` (HTTP + static files), `web_settings` (settings/admin API), `web_ws` (WebSocket hub), `console_cmds`, `app_events` |
+| `main/features/` | one `.c` per feature, plus the registry `features.c`: `bms` (+ `bms_proto`), `button`, `factory_reset`, `sysinfo`, `temp` |
 | `main/web/` | frontend, embedded as-is: `index.html`, `app.css`, `app.js` (shell), `settings.js`, `chart.js` (live line chart for cards) |
 | `main/web/features/` | one ES module per feature UI, loaded automatically |
 | `main/web_assets.cmake` | embeds `main/web/**` and generates the file table and `/features.json` |
@@ -139,9 +149,9 @@ The home page shows only the Battery card; board stats live under Settings → S
    `app.css` (`card`, `row`, `msg`, `dl`, `button.primary`, `meter`) and its colour variables.
 8. **Settings** (optional): the main page is for using the board; configuration goes on the
    Settings page (cog icon), which has Back/Close and a Save/Cancel bar. The page is grouped into
-   categories (`CATEGORIES` in `app.js`): System (firmware, hardware, health, logs), Network,
-   Features and Security, one shown at a time. Feature sections go under Features by default; set
-   `category` only for one that belongs elsewhere. Add a section from the same module:
+   categories (`CATEGORIES` in `app.js`): Battery (the BMS connection; opens first), Network,
+   System (firmware, hardware, health, logs) and Security, one shown at a time. Sections go under
+   Battery by default; set `category` for one that belongs elsewhere. Add a section from the same module:
    ```js
    App.settings({ id: '<name>', title: 'Name', order: 50,   // order within the category
      mount(el, ctx) {                                        // ctx.dirty(true) on every edit

@@ -36,12 +36,30 @@ idf.py build flash monitor
 The Wi-Fi password in `sdkconfig.secrets` only seeds NVS on first boot. Release builds don't
 contain it, and OTA keeps what's in NVS, including a passkey set with `bms pin`.
 
-## First setup (USB console)
+## First setup
+
+**From a phone.** With no Wi-Fi network saved, the board opens a setup hotspot named after its
+hostname (`fs-bms-xxxxxx`). Join it; the setup page opens by itself, or browse to
+`http://192.168.4.1/`.
+
+1. Settings → Network: pick your Wi-Fi network. The board joins it, shows its new address, and turns
+   the hotspot off a minute later.
+2. Settings → Security: set an admin password.
+3. Settings → Battery: **Find batteries**, choose yours (or leave **Automatic**), and
+   Save.
+
+The hotspot also comes back if the saved network is unreachable for 3 minutes
+(`CONFIG_APP_SETUP_AP_AFTER_S`). It is open unless `CONFIG_APP_SETUP_AP_PASSWORD` is set, so set an
+admin password.
+
+**From the USB console.**
 
 ```
 bms> wifi MyNetwork mypassword
 bms> name fs-bms             # DHCP/mDNS hostname
 bms> passwd s3cret           # web admin password (protects Settings, OTA, POST /api/bms)
+bms> bms scan                # list batteries in range
+bms> bms addr <address>      # optional: pin one; otherwise the first found is used
 bms> bms pin <passkey>       # only if the battery doesn't use the default 123456
 bms> bms                     # status + last sample
 ```
@@ -50,11 +68,22 @@ bms> bms                     # status + last sample
 |---|---|
 | `bms` / `bms status` | state, last error, poll counts, last sample |
 | `bms raw` | the last raw JSON replies (live data and device info), as the pack sent them |
+| `bms scan` | search for 8 s and list the batteries in range, strongest first |
 | `bms poll` | poll now |
 | `bms interval <s>` | poll interval, 10–3600 s (default 30) |
 | `bms addr <AA:BB:CC:DD:EE:FF>` / `bms addr -` | pin one pack / take the first named `F07*`/`F10*` |
 | `bms pin <passkey>` / `bms pin -` | BLE pairing passkey / back to the default `123456` |
 | `bms pause <min>` | stop polling, e.g. to use the FSolar app; `bms pause 0` resumes. Not kept across reboots |
+| `ap [on\|off]` | show or switch the setup hotspot |
+| `factory-reset yes` | erase all settings and reboot (see below) |
+
+A battery that is connected to the FSolar app doesn't advertise, so it won't show up in a search.
+
+## Factory reset
+
+Settings → System, `factory-reset yes` on the console, or hold the BOOT button for 10 s. It erases
+the Wi-Fi network, hostname, admin password, BMS settings (passkey, address, interval) and the BLE
+pairing, then reboots into the setup hotspot. The firmware stays.
 
 The first three successful polls after boot log the raw JSON at INFO on the serial console. The web
 log viewer cuts lines at 200 chars, so use `bms raw` or `GET /api/bms/raw` for the whole frame.
@@ -113,10 +142,13 @@ should point it at its own releases.
 | GET | `/api/bms` | status and last sample as JSON (same as the `bms` WebSocket topic) |
 | GET | `/api/bms/raw` | `{real, basic}`: the last raw replies from the pack |
 | GET | `/api/bms/history` | `{interval_s, len, soc[], power[], delta_mv[]}`: the last 240 good samples (RAM only, lost on reboot) |
+| POST | `/api/bms/scan` | start an 8 s search for batteries |
+| GET | `/api/bms/scan` | `{state: idle\|searching\|done, results: [{name, addr, rssi, pinned, in_use}]}` |
 | POST | `/api/bms` | (admin) any of `{interval_s, addr, pin, pause_min, poll: true}` |
 | GET | `/api/info` | firmware, board and Wi-Fi stats |
 | GET | `/api/ota`, POST `/api/ota/check`, `/api/ota/update` | OTA (admin for POST) |
 | POST | `/api/reboot` | (admin) |
+| POST | `/api/factory-reset` | (admin) erase all settings and reboot |
 | GET/POST | `/api/settings/wifi`, `/api/settings/name`, `/api/settings/password` | Wi-Fi (tried for 30 s before saving), hostname, admin password (admin for POST) |
 | GET | `/api/logs?after=<seq>` | (admin) buffered log lines |
 
@@ -135,8 +167,9 @@ and decoding against sample replies, plus every capture in `test/fixtures/*.json
 |---|---|
 | `main/features/bms.c` | BLE session (NimBLE central, pairing), polling task, `/metrics`, `/api/bms`, `bms` command |
 | `main/features/bms_proto.c` | Felicity protocol: JSON reassembly and decoding, no BLE (host-tested) |
-| `main/web/features/bms.js` | the home page's Battery card and Settings → Battery BMS |
-| `main/core/` | Wi-Fi + mDNS, NVS settings, admin auth, log buffer, OTA, HTTP + WebSocket, console |
+| `main/web/features/bms.js` | the home page's Battery card and Settings → Battery |
+| `main/features/factory_reset.c`, `button.c` | factory reset (also on a 10 s BOOT-button hold) |
+| `main/core/` | Wi-Fi + mDNS + setup hotspot with captive DNS, NVS settings, admin auth, log buffer, OTA, HTTP + WebSocket, console |
 | `docs/felicity-protocol.md` | BLE protocol reference: GATT, pairing, commands, field layout |
 
 ## License

@@ -18,7 +18,19 @@ ESP_EVENT_DECLARE_BASE(APP_EVENT);
 
 typedef enum {
     APP_EVENT_BMS_POLLED,   // a BMS poll finished; data is app_bms_event_t
+    APP_EVENT_BUTTON,       // BOOT button changed; data is app_button_event_t
 } app_event_id_t;
+
+// APP_EVENT_BUTTON is posted three ways during one press:
+//   press:      pressed=true,  long_press=false  (count already includes this press)
+//   long press: pressed=true,  long_press=true   (once, after 1 s held)
+//   release:    pressed=false, long_press=whether this press was a long one
+// So a short press is a release with long_press == false.
+typedef struct {
+    bool pressed;
+    uint32_t count;     // presses since boot
+    bool long_press;
+} app_button_event_t;
 
 typedef struct {
     bool ok;            // false: the poll failed; bms_get_sample() keeps the last good one

@@ -37,6 +37,10 @@ esp_err_t ota_start_update(void);
 
 void ota_get_status(ota_status_t *out);
 
-// True while an update is downloading or about to reboot: radio-heavy work (BLE)
-// should wait, since Wi-Fi shares the radio on single-antenna chips.
+// True while a check or an update runs: radio- and memory-heavy work (BLE) should
+// not start, since Wi-Fi shares the radio and a TLS session needs ~40 KB of heap.
 bool ota_busy(void);
+
+// Called on the OTA path before each TLS connection, once ota_busy() is true. It
+// should return when the caller's own heavy work has finished (bounded wait).
+void ota_set_quiesce_hook(void (*fn)(void));

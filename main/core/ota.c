@@ -22,6 +22,7 @@ static const char *TAG = "ota";
 #define HTTP_BUF_SIZE 4096
 
 static ota_status_t s_status;
+static void (*s_quiesce)(void);
 static SemaphoreHandle_t s_lock;
 
 static void lock(void)
@@ -67,9 +68,22 @@ bool ota_busy(void)
         return false;
     }
     lock();
-    bool busy = s_status.state == OTA_DOWNLOADING || s_status.state == OTA_REBOOTING;
+    bool busy = s_status.state == OTA_CHECKING || s_status.state == OTA_DOWNLOADING ||
+                s_status.state == OTA_REBOOTING;
     unlock();
     return busy;
+}
+
+void ota_set_quiesce_hook(void (*fn)(void))
+{
+    s_quiesce = fn;
+}
+
+static void quiesce(void)
+{
+    if (s_quiesce) {
+        s_quiesce();
+    }
 }
 
 // Compare "vMAJOR.MINOR.PATCH[-suffix]" strings numerically; suffixes are ignored.
@@ -134,6 +148,7 @@ esp_err_t ota_check(void)
     s_status.state = OTA_CHECKING;
     s_status.error[0] = '\0';
     unlock();
+    quiesce();
 
     body_t body = {.buf = calloc(1, MANIFEST_MAX)};
     if (!body.buf) {
@@ -211,6 +226,7 @@ static esp_err_t validate_image(esp_https_ota_handle_t handle)
 
 static void update_task(void *arg)
 {
+    quiesce();
     char url[256];
     lock();
     strlcpy(url, s_status.latest_url, sizeof(url));

@@ -102,6 +102,7 @@ cJSON *web_info_json(void)
     cJSON_AddNumberToObject(board, "psram_free", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddNumberToObject(board, "heap_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(board, "heap_min_free", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    cJSON_AddNumberToObject(board, "heap_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(board, "uptime_s", esp_timer_get_time() / 1000000);
     cJSON_AddStringToObject(board, "reset_reason", reset_reason_name(esp_reset_reason()));
     cJSON_AddStringToObject(board, "mac", mac_str);

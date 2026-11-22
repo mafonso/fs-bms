@@ -39,3 +39,6 @@ CONFIG_ESP_WIFI_RX_BA_WIN=4
 # off): allocating 16 KB per record failed on a fragmented heap mid-update.
 # The board only scans and connects; it never advertises or scans passively
 CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n
+# NimBLE buffers: one connection, and the pack's replies are a few hundred bytes
+CONFIG_BT_NIMBLE_MSYS_2_BLOCK_COUNT=12
+CONFIG_BT_NIMBLE_ACL_BUF_COUNT=12

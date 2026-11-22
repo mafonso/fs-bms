@@ -817,7 +817,7 @@ static void bms_task(void *arg)
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // until turned on, or a search is asked for
             continue;
         }
-        // A BLE session stalls Wi-Fi long enough to break an update download.
+        // A BLE session stalls Wi-Fi and takes heap a running OTA check or download needs.
         if (paused <= 0 && !ota_busy()) {
             poll_once();
         }
@@ -1362,11 +1362,29 @@ static void bms_console(void)
 
 // ---------------------------------------------------------------------------
 
+// OTA quiesce hook: let a BLE session in progress finish before a TLS connection
+// opens; ota_busy() keeps new ones from starting. Both need tens of KB of heap.
+static void wait_ble_idle(void)
+{
+    for (int i = 0; i < 300; i++) {      // 30 s, longer than a full session
+        lock();
+        const char *st = s_st.state;
+        bool busy = s_st.finding || !strcmp(st, "scanning") || !strcmp(st, "connecting") ||
+                    !strcmp(st, "reading");
+        unlock();
+        if (!busy) {
+            return;
+        }
+        vTaskDelay(pdMS_TO_TICKS(100));
+    }
+}
+
 static esp_err_t bms_init(void)
 {
     s_ev = xEventGroupCreate();
     s_lock = xSemaphoreCreateMutex();
     s_st.enabled = settings_get_bms_enabled();
+    ota_set_quiesce_hook(wait_ble_idle);
     s_frame = heap_caps_malloc(sizeof(*s_frame), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_frame) {
         s_frame = malloc(sizeof(*s_frame));

@@ -38,8 +38,10 @@ idf.py flash monitor     # Ctrl-] quits monitor
 - Chips: `sdkconfig.defaults` holds shared settings; `sdkconfig.defaults.<target>` the chip's flash, PSRAM,
   partition table (`partitions.csv` 16 MB, `partitions_4mb.csv`) and memory sizing. Code that differs
   per chip uses `CONFIG_SPIRAM` (memory) or `CONFIG_IDF_TARGET_*` (pins). Without PSRAM, internal heap
-  is the limit: check `heap_min_free` in `/api/info` after a change (C3: ~68 KB idle, ~14 KB at the
-  low point of a full page load), and build both targets. The C3 caps Wi-Fi TX power at 10 dBm: many
+  is the limit: check `heap_min_free` and `heap_largest` in `/api/info` after a change (C3: ~68 KB
+  idle, ~12 KB at the low point of a page load or an OTA), and build both targets. A TLS session (OTA)
+  needs ~40 KB: OTA waits for a BLE session in progress (`ota_set_quiesce_hook`) and none start
+  while `ota_busy()`. The C3 caps Wi-Fi TX power at 10 dBm: many
   small C3 boards never get past Wi-Fi authentication at full power.
 
 - If a build dir predates a change to `sdkconfig.defaults`, delete `sdkconfig` (and rerun the build) so the

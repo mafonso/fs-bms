@@ -43,7 +43,10 @@ writing the RX CCCD fails with ATT error `0x05` (Insufficient Authentication).
 | Just Works | rejected: SMP Pairing Failed `0x03` (Authentication Requirements) |
 | Wrong passkey | SMP Pairing Failed `0x04` (Confirm Value Failed) |
 
-After bonding, later connections re-encrypt with the stored keys. A BLE proxy that cannot bond (such
+After bonding, later connections re-encrypt with the stored keys. The BMS keeps a small, fixed number
+of bonds (phones included) and does not drop old ones: once it is full, a new central still pairs and
+encrypts, but writing the RX CCCD fails with ATT error `0x11` (Insufficient Resources). Clearing the
+BMS's Bluetooth bonds frees them. A BLE proxy that cannot bond (such
 as an ESPHome Bluetooth proxy) cannot read the BMS.
 
 ## Commands

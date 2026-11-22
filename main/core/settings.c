@@ -168,6 +168,32 @@ esp_err_t settings_set_admin_hash(const uint8_t salt[SETTINGS_SALT_LEN], const u
     return err;
 }
 
+bool settings_get_bms_enabled(void)
+{
+    uint8_t v = 1;
+    nvs_handle_t h;
+    if (nvs_open(NS, NVS_READONLY, &h) == ESP_OK) {
+        nvs_get_u8(h, "bms_on", &v);
+        nvs_close(h);
+    }
+    return v != 0;
+}
+
+esp_err_t settings_set_bms_enabled(bool on)
+{
+    nvs_handle_t h;
+    esp_err_t err = nvs_open(NS, NVS_READWRITE, &h);
+    if (err != ESP_OK) {
+        return err;
+    }
+    err = nvs_set_u8(h, "bms_on", on ? 1 : 0);
+    if (err == ESP_OK) {
+        err = nvs_commit(h);
+    }
+    nvs_close(h);
+    return err;
+}
+
 uint32_t settings_get_bms_interval(void)
 {
     uint32_t v = SETTINGS_BMS_INTERVAL_DEFAULT;

@@ -104,10 +104,16 @@ bms> bms                     # status + last sample
 | `bms addr <AA:BB:CC:DD:EE:FF>` / `bms addr -` | pin one pack / take the first named `F07*`/`F10*` |
 | `bms pin <passkey>` / `bms pin -` | BLE pairing passkey / back to the default `123456` |
 | `bms pause <min>` | stop polling, e.g. to use the FSolar app; `bms pause 0` resumes. Not kept across reboots |
+| `bms off` / `bms on` | turn polling off or on, kept across reboots (also Settings → Battery) |
 | `ap [on\|off]` | show or switch the setup hotspot |
 | `factory-reset yes` | erase all settings and reboot (see below) |
 
 A battery that is connected to the FSolar app doesn't advertise, so it won't show up in a search.
+
+The pack remembers a limited number of paired devices (phones included). When it is full, a new board
+pairs but every poll fails with `subscribe failed (273)` (ATT "Insufficient Resources"). Turn polling
+off (`bms off`) on boards that don't need the pack, so they don't use a pairing; freeing one on the
+pack means resetting its Bluetooth.
 
 ## Factory reset
 
@@ -175,7 +181,7 @@ should point it at its own releases.
 | GET | `/api/bms/history` | `{interval_s, len, soc[], power[], delta_mv[]}`: the last 240 good samples (RAM only, lost on reboot) |
 | POST | `/api/bms/scan` | start an 8 s search for batteries |
 | GET | `/api/bms/scan` | `{state: idle\|searching\|done, results: [{name, addr, rssi, pinned, in_use}]}` |
-| POST | `/api/bms` | (admin) any of `{interval_s, addr, pin, pause_min, poll: true}` |
+| POST | `/api/bms` | (admin) any of `{enabled, interval_s, addr, pin, pause_min, poll: true}` |
 | GET | `/api/info` | firmware, board and Wi-Fi stats |
 | GET | `/api/ota`, POST `/api/ota/check`, `/api/ota/update` | OTA (admin for POST) |
 | POST | `/api/reboot` | (admin) |

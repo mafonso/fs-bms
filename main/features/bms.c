@@ -96,7 +96,8 @@ static char *s_msg_raw;
 
 // ---- Published state, under s_lock ----
 static struct {
-    const char *state;              // idle | scanning | connecting | reading | paused
+    const char *state;              // idle | scanning | connecting | reading | paused | off
+    bool enabled;                   // polling on (NVS bms_on); off: no connections at all
     bool have_sample;
     bms_sample_t sample;
     int64_t sample_us;
@@ -782,12 +783,17 @@ static void poll_once(void)
 static void bms_task(void *arg)
 {
     xEventGroupWaitBits(s_ev, EV_SYNC, pdFALSE, pdTRUE, portMAX_DELAY);
-    ESP_LOGI(TAG, "BLE ready; polling every %" PRIu32 " s", settings_get_bms_interval());
+    if (s_st.enabled) {
+        ESP_LOGI(TAG, "BLE ready; polling every %" PRIu32 " s", settings_get_bms_interval());
+    } else {
+        ESP_LOGI(TAG, "BLE ready; polling is off ('bms on' turns it on)");
+    }
     for (;;) {
         int64_t start = esp_timer_get_time();
         lock();
         int64_t paused = s_st.paused_until_us - start;
-        s_st.state = paused > 0 ? "paused" : "idle";
+        bool enabled = s_st.enabled;
+        s_st.state = !enabled ? "off" : paused > 0 ? "paused" : "idle";
         if (s_st.addr_pending) {
             // Between sessions, so no scan callback is reading these.
             s_st.addr_pending = false;
@@ -801,10 +807,14 @@ static void bms_task(void *arg)
         s_st.find_pending = false;
         unlock();
         if (want_find) {
-            find();         // between sessions, so the radio is free; also while paused
-            if (paused > 0) {
+            find();         // between sessions, so the radio is free; also while paused or off
+            if (paused > 0 || !enabled) {
                 continue;
             }
+        }
+        if (!enabled) {
+            ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // until turned on, or a search is asked for
+            continue;
         }
         if (paused <= 0) {
             poll_once();
@@ -840,6 +850,7 @@ static cJSON *status_json(void)
     cJSON *o = cJSON_CreateObject();
     lock();
     cJSON_AddStringToObject(o, "state", s_st.state);
+    cJSON_AddBoolToObject(o, "enabled", s_st.enabled);
     cJSON_AddBoolToObject(o, "ok", s_st.last_ok);
     cJSON_AddNumberToObject(o, "polls_ok", s_st.polls_ok);
     cJSON_AddNumberToObject(o, "polls_err", s_st.polls_err);
@@ -1124,12 +1135,33 @@ static esp_err_t raw_get(httpd_req_t *req)
 // ---------------------------------------------------------------------------
 // Control, shared by the HTTP API and the console. Return NULL or an error message.
 
-static void poll_now(void)
+static const char *poll_now(void)
 {
     lock();
+    bool enabled = s_st.enabled;
+    if (enabled) {
+        s_st.paused_until_us = 0;
+    }
+    unlock();
+    if (!enabled) {
+        return "polling is off";
+    }
+    xTaskNotifyGive(s_task);
+    return NULL;
+}
+
+static const char *set_enabled(bool on)
+{
+    if (settings_set_bms_enabled(on) != ESP_OK) {
+        return "could not save the setting";
+    }
+    lock();
+    s_st.enabled = on;
     s_st.paused_until_us = 0;
     unlock();
+    ESP_LOGI(TAG, "polling %s", on ? "on" : "off");
     xTaskNotifyGive(s_task);
+    return NULL;
 }
 
 static const char *set_interval(int seconds)
@@ -1206,6 +1238,9 @@ static esp_err_t api_post(httpd_req_t *req)
     }
     const char *e = NULL;
     const cJSON *v;
+    if (!e && cJSON_IsBool(v = cJSON_GetObjectItem(body, "enabled"))) {
+        e = set_enabled(cJSON_IsTrue(v));
+    }
     if (!e && cJSON_IsNumber(v = cJSON_GetObjectItem(body, "interval_s"))) {
         e = set_interval(v->valueint);
     }
@@ -1219,7 +1254,7 @@ static esp_err_t api_post(httpd_req_t *req)
         pause_for(v->valueint);
     }
     if (!e && cJSON_IsTrue(cJSON_GetObjectItem(body, "poll"))) {
-        poll_now();
+        e = poll_now();
     }
     cJSON_Delete(body);
     if (e) {
@@ -1289,8 +1324,11 @@ static int cmd_bms(int argc, char **argv)
         printf(n ? "pin one with: bms addr <address>\n" : "no BMS found (is another device connected to it?)\n");
         cJSON_Delete(o);
     } else if (!strcmp(sub, "poll")) {
-        poll_now();
-        printf("polling\n");
+        if (!(e = poll_now())) {
+            printf("polling\n");
+        }
+    } else if (!strcmp(sub, "on") || !strcmp(sub, "off")) {
+        e = set_enabled(!strcmp(sub, "on"));
     } else if (!strcmp(sub, "interval") && argc == 3) {
         e = set_interval(atoi(argv[2]));
     } else if (!strcmp(sub, "addr") && argc == 3) {
@@ -1300,7 +1338,7 @@ static int cmd_bms(int argc, char **argv)
     } else if (!strcmp(sub, "pause") && argc == 3) {
         pause_for(atoi(argv[2]));
     } else {
-        printf("usage: bms [status|raw|scan|poll|interval <s>|addr <AA:BB:CC:DD:EE:FF>|addr -|pin <passkey>|pin -|pause <min>]\n");
+        printf("usage: bms [status|raw|scan|poll|on|off|interval <s>|addr <AA:BB:CC:DD:EE:FF>|addr -|pin <passkey>|pin -|pause <min>]\n");
         return 1;
     }
     if (e) {
@@ -1314,7 +1352,7 @@ static void bms_console(void)
 {
     static const esp_console_cmd_t cmd = {
         .command = "bms",
-        .help = "Battery BMS: status | raw | scan | poll | interval <s> | addr <mac>|- | pin <passkey>|- (default) | pause <min> (0 resumes)",
+        .help = "Battery BMS: status | raw | scan | poll | on|off (kept across reboots) | interval <s> | addr <mac>|- | pin <passkey>|- (default) | pause <min> (0 resumes)",
         .func = cmd_bms,
     };
     esp_console_cmd_register(&cmd);
@@ -1326,6 +1364,7 @@ static esp_err_t bms_init(void)
 {
     s_ev = xEventGroupCreate();
     s_lock = xSemaphoreCreateMutex();
+    s_st.enabled = settings_get_bms_enabled();
     s_frame = heap_caps_malloc(sizeof(*s_frame), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_frame) {
         s_frame = malloc(sizeof(*s_frame));

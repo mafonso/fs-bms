@@ -15,7 +15,10 @@ GitHub-Releases OTA and a USB console.
   commit a user's own passkey.
 - **Hold one BLE connection at a time**: one session per poll, then disconnect, so the FSolar app can
   connect in between. Don't keep the link open.
-- Don't keep polling with a wrong passkey: `bms pause <min>` stops the attempts.
+- Don't keep polling with a wrong passkey: `bms pause <min>` stops the attempts (RAM only).
+  `bms off` (NVS `bms_on`, Settings → Battery) keeps a board off the pack across reboots: use it on dev
+  boards that don't need the pack. The pack holds few pairings; when full, polls fail with
+  `subscribe failed (273)`.
 - Report this pack's flags (`BBwarn`/`BBfault`, `BattList`, `BLVolCu`) as the pack's values; `Bwarn`,
   `Batt`, `LVolCur` are bank aggregates. See the protocol reference.
 - Opening the serial port can reset the board, and `bms pause` is RAM-only. Set the port's DTR/RTS

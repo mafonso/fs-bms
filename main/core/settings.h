@@ -35,6 +35,9 @@ esp_err_t settings_set_admin_hash(const uint8_t salt[SETTINGS_SALT_LEN], const u
 #define SETTINGS_BMS_INTERVAL_DEFAULT 30
 #define SETTINGS_BMS_INTERVAL_MIN 10
 #define SETTINGS_BMS_INTERVAL_MAX 3600
+// BLE polling on/off (default on); off keeps a board off the pack across reboots.
+bool settings_get_bms_enabled(void);
+esp_err_t settings_set_bms_enabled(bool on);
 uint32_t settings_get_bms_interval(void);
 esp_err_t settings_set_bms_interval(uint32_t seconds);
 esp_err_t settings_get_bms_addr(char addr[SETTINGS_BMS_ADDR_MAX]);  // "" if unset

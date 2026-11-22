@@ -98,7 +98,8 @@ export default function (App) {
         const s = d.sample;
         $('dot').className = 'dot ' + (d.ok ? 'ok' : d.polls_err ? 'err' : '');
         const who = [d.name, d.info && `version ${d.info.sw} · master ${d.info.fw} · IAP ${d.info.iap}`].filter(Boolean).join(' · ');
-        const st = d.state === 'paused' ? `paused for ${Math.ceil(d.paused_s / 60)} min`
+        const st = d.state === 'off' ? 'polling off (Settings → Battery)'
+          : d.state === 'paused' ? `paused for ${Math.ceil(d.paused_s / 60)} min`
           : d.ok ? `updated ${s ? s.age_s : '?'} s ago, every ${d.interval_s} s` : (d.error || d.state);
         $('state').textContent = [st, who].filter(Boolean).join(' · ');
         const lost = !d.ok && /no BMS found/.test(d.error || '');
@@ -198,7 +199,10 @@ export default function (App) {
           .bms-pick input { width: auto; margin-top: 3px; }
           .bms-pick small { display: block; color: var(--muted); font-size: 12px; }
         </style>
-        <label style="margin-top:0">Battery</label>
+        <label class="bms-pick" style="margin-top:0"><input type="checkbox" data-k="enabled"><span>Read the battery
+          <small>Off: the board never connects to the pack, even after a restart. For a spare or development board
+          that shouldn't take one of the pack's Bluetooth pairings or get in the FSolar app's way.</small></span></label>
+        <label>Battery</label>
         <div data-k="pick"></div>
         <div class="row"><button data-k="find">Find batteries</button><span class="hint" data-k="find-msg" style="margin:0"></span></div>
         <label>Pairing passkey<input data-k="pin" inputmode="numeric" autocomplete="off" placeholder=""></label>
@@ -209,6 +213,7 @@ export default function (App) {
       root = el;
       ctxRef = ctx;
       for (const k of ['interval', 'pin']) $s(k).oninput = () => ctx.dirty(true);
+      $s('enabled').onchange = () => ctx.dirty(true);
       const act = async (body, text) => {
         try { await App.api('/api/bms', { method: 'POST', body }); $s('msg').className = 'msg ok'; $s('msg').textContent = text; }
         catch (e) { $s('msg').className = 'msg err'; $s('msg').textContent = e.message; }
@@ -229,12 +234,13 @@ export default function (App) {
     reset() {
       sel = stored.pinned_addr ?? '';
       renderPicker();
+      $s('enabled').checked = stored.enabled ?? true;
       $s('interval').value = stored.interval_s ?? 30;
       $s('pin').value = '';
       $s('pin').placeholder = stored.pin_set ? 'custom passkey set' : 'default (123456)';
     },
     async save() {
-      const body = { interval_s: Number($s('interval').value) };
+      const body = { enabled: $s('enabled').checked, interval_s: Number($s('interval').value) };
       // Only when changed: a new address makes the board forget the battery and connect afresh.
       if (sel !== (stored.pinned_addr ?? '')) body.addr = sel;
       if ($s('pin').value.trim()) body.pin = $s('pin').value.trim();

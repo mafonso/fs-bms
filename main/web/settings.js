@@ -79,7 +79,7 @@ async function refreshInfo() {
   $('ver').textContent = f.version;
   $('build').textContent = `${f.project} · built ${f.build_date} ${f.build_time} · ESP-IDF ${f.idf} · slot ${f.partition}`;
   $('chip').textContent = `${b.chip.toUpperCase()} rev ${Math.floor(b.revision / 100)}.${b.revision % 100}`;
-  $('cpu').textContent = `${b.cores} cores @ ${b.cpu_mhz} MHz`;
+  $('cpu').textContent = `${b.cores} ${b.cores === 1 ? 'core' : 'cores'} @ ${b.cpu_mhz} MHz`;
   $('flash').textContent = mb(b.flash_bytes);
   $('temp').textContent = b.temp_c !== undefined ? b.temp_c.toFixed(1) + ' °C' : 'n/a';
   $('mac').textContent = b.mac;

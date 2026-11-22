@@ -1102,24 +1102,50 @@ static esp_err_t scan_post(httpd_req_t *req)
 }
 
 // {interval_s, soc: [...], power: [...], delta_mv: [...]}, oldest first.
+// Streamed in small chunks: as a cJSON tree the 3 x 240 numbers would take ~30 KB.
 static esp_err_t history_get(httpd_req_t *req)
 {
-    cJSON *o = cJSON_CreateObject();
-    cJSON_AddNumberToObject(o, "interval_s", settings_get_bms_interval());
-    cJSON_AddNumberToObject(o, "len", HISTORY_LEN);
-    cJSON *soc = cJSON_AddArrayToObject(o, "soc");
-    cJSON *pw = cJSON_AddArrayToObject(o, "power");
-    cJSON *dm = cJSON_AddArrayToObject(o, "delta_mv");
     lock();
+    size_t n = s_hist ? s_hist_count : 0;
     size_t start = s_hist_count < HISTORY_LEN ? 0 : s_hist_head;
-    for (size_t i = 0; s_hist && i < s_hist_count; i++) {
-        const hist_t *h = &s_hist[(start + i) % HISTORY_LEN];
-        cJSON_AddItemToArray(soc, cJSON_CreateNumber(roundf(h->soc * 100) / 100));
-        cJSON_AddItemToArray(pw, cJSON_CreateNumber(roundf(h->power)));
-        cJSON_AddItemToArray(dm, cJSON_CreateNumber(roundf(h->delta_mv)));
+    hist_t *copy = n ? malloc(n * sizeof(hist_t)) : NULL;
+    for (size_t i = 0; copy && i < n; i++) {
+        copy[i] = s_hist[(start + i) % HISTORY_LEN];
     }
     unlock();
-    return web_send_json(req, o);
+    if (n && !copy) {
+        n = 0;  // no memory for a copy: answer with an empty history
+    }
+
+    httpd_resp_set_type(req, "application/json");
+    httpd_resp_set_hdr(req, "Cache-Control", "no-store");
+    char buf[512];
+    size_t len = snprintf(buf, sizeof(buf), "{\"interval_s\":%" PRIu32 ",\"len\":%d",
+                          settings_get_bms_interval(), HISTORY_LEN);
+    static const char *const keys[] = {"soc", "power", "delta_mv"};
+    esp_err_t err = ESP_OK;
+    for (int k = 0; k < 3 && err == ESP_OK; k++) {
+        len += snprintf(buf + len, sizeof(buf) - len, ",\"%s\":[", keys[k]);
+        for (size_t i = 0; i < n && err == ESP_OK; i++) {
+            float v = k == 0 ? roundf(copy[i].soc * 100) / 100
+                    : k == 1 ? roundf(copy[i].power) : roundf(copy[i].delta_mv);
+            len += snprintf(buf + len, sizeof(buf) - len, "%s%g", i ? "," : "", v);
+            if (len > sizeof(buf) - 32) {
+                err = httpd_resp_send_chunk(req, buf, len);
+                len = 0;
+            }
+        }
+        len += snprintf(buf + len, sizeof(buf) - len, "]");
+    }
+    len += snprintf(buf + len, sizeof(buf) - len, "}");
+    if (err == ESP_OK) {
+        err = httpd_resp_send_chunk(req, buf, len);
+    }
+    free(copy);
+    if (err == ESP_OK) {
+        err = httpd_resp_send_chunk(req, NULL, 0);
+    }
+    return err;
 }
 
 // {"real": <last raw reply>, "basic": <device info reply>}, as the BMS sent them.
@@ -1401,8 +1427,12 @@ static esp_err_t bms_init(void)
         return ESP_ERR_NO_MEM;
     }
     bms_frame_reset(s_frame);
-    // Charts are optional: without PSRAM there is just no history.
+    // Chart history: 240 x 12 bytes, in PSRAM when there is some. Charts are optional,
+    // so a failed allocation only means no history.
     s_hist = heap_caps_calloc(HISTORY_LEN, sizeof(hist_t), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
+    if (!s_hist) {
+        s_hist = calloc(HISTORY_LEN, sizeof(hist_t));
+    }
     if (ble_uuid_from_str(&s_svc_uuid, BMS_SVC_UUID) || ble_uuid_from_str(&s_tx_uuid, BMS_TX_UUID) ||
         ble_uuid_from_str(&s_rx_uuid, BMS_RX_UUID)) {
         return ESP_ERR_INVALID_ARG;

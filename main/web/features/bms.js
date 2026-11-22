@@ -98,7 +98,7 @@ export default function (App) {
         const s = d.sample;
         $('dot').className = 'dot ' + (d.ok ? 'ok' : d.polls_err ? 'err' : '');
         const who = [d.name, d.info && `version ${d.info.sw} · master ${d.info.fw} · IAP ${d.info.iap}`].filter(Boolean).join(' · ');
-        const st = d.state === 'off' ? 'polling off (Settings → Battery)'
+        const st = d.state === 'off' ? 'polling off'
           : d.state === 'paused' ? `paused for ${Math.ceil(d.paused_s / 60)} min`
           : d.ok ? `updated ${s ? s.age_s : '?'} s ago, every ${d.interval_s} s` : (d.error || d.state);
         $('state').textContent = [st, who].filter(Boolean).join(' · ');
@@ -196,12 +196,11 @@ export default function (App) {
         <style>
           .bms-pick { display: flex; gap: 10px; align-items: flex-start; margin-top: 8px; padding: 8px 10px;
             border: 1px solid var(--line); border-radius: 8px; color: var(--text); font-size: 15px; cursor: pointer; }
-          .bms-pick input { width: auto; margin-top: 3px; }
+          .bms-pick input { width: 16px; height: 16px; margin: 3px 0 0; padding: 0; flex: none; accent-color: var(--accent); }
           .bms-pick small { display: block; color: var(--muted); font-size: 12px; }
         </style>
-        <label class="bms-pick" style="margin-top:0"><input type="checkbox" data-k="enabled"><span>Read the battery
-          <small>Off: the board never connects to the pack, even after a restart. For a spare or development board
-          that shouldn't take one of the pack's Bluetooth pairings or get in the FSolar app's way.</small></span></label>
+        <label class="check" style="margin-top:0"><input type="checkbox" data-k="enabled">Battery polling</label>
+        <p class="hint">When off, the board doesn't connect to the battery until polling is turned back on.</p>
         <label>Battery</label>
         <div data-k="pick"></div>
         <div class="row"><button data-k="find">Find batteries</button><span class="hint" data-k="find-msg" style="margin:0"></span></div>

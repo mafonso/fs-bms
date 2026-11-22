@@ -106,6 +106,9 @@ input:disabled, select:disabled { opacity: .6; }
 .inrow { display: flex; gap: 8px; align-items: center; }
 .inrow > input { flex: 1; }
 .hint { color: var(--muted); font-size: 13px; margin: 10px 0 0; }
+/* A checkbox with its label on one line: <label class="check"><input type="checkbox"> Text</label> */
+label.check { display: flex; align-items: center; gap: 8px; color: var(--text); font-size: 15px; cursor: pointer; }
+label.check > input { width: 16px; height: 16px; margin: 0; padding: 0; flex: none; accent-color: var(--accent); }
 
 /* Admin sign-in dialog (app.js askPassword) */
 dialog {

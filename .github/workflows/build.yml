@@ -30,11 +30,13 @@ jobs:
           import json, sys
           target = sys.argv[1]
           budget = {"esp32c3": 130000}.get(target)
-          layout = {m["name"]: m for m in json.load(open("build/size.json"))["layout"]}
-          dram = layout["DRAM"]["used"]
-          print(f"{target}: static DRAM {dram} bytes" + (f", budget {budget}" if budget else ""))
-          if budget and dram > budget:
-              sys.exit(f"static DRAM {dram} exceeds the {target} budget of {budget} bytes")
+          layout = {m["name"]: m["used"] for m in json.load(open("build/size.json"))["layout"]}
+          print(f"{target}: " + ", ".join(f"{k} {v}" for k, v in layout.items()))
+          if budget:
+              dram = layout["DRAM"]
+              print(f"static DRAM {dram} bytes, budget {budget}")
+              if dram > budget:
+                  sys.exit(f"static DRAM {dram} exceeds the {target} budget of {budget} bytes")
           PY
           ls -l build/fs-bms.bin
 

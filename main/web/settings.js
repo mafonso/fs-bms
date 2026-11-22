@@ -169,9 +169,10 @@ function mountFirmware(el) {
     try {
       let o = await App.api('/api/ota/check', { method: 'POST' });
       // The check runs on the board's own task; wait for it (TLS to GitHub takes a few seconds).
+      // The board can be too busy with the handshake to answer one poll; keep asking.
       for (let i = 0; i < 60 && o.state === 'checking'; i++) {
         await new Promise(r => setTimeout(r, 1000));
-        o = await App.api('/api/ota');
+        try { o = await App.api('/api/ota'); } catch (e) { /* busy: try again */ }
       }
       showOta(o);
     }

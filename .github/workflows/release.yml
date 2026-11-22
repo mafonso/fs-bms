@@ -10,6 +10,9 @@ permissions:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [esp32s3, esp32c3]
     steps:
       - uses: actions/checkout@v5
 
@@ -24,22 +27,24 @@ jobs:
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v6.1
-          target: esp32s3
+          target: ${{ matrix.target }}
 
+      # The ESP32-S3 assets keep their original names (fs-bms.bin, version.json),
+      # which boards from before multi-chip support look for. Other chips get
+      # fs-bms-<target>.bin and version-<target>.json (CONFIG_APP_OTA_MANIFEST_URL).
       - name: Prepare release assets
         run: |
+          if [ "${{ matrix.target }}" = esp32s3 ]; then suffix=""; else suffix="-${{ matrix.target }}"; fi
           mkdir dist
-          cp build/fs-bms.bin dist/
+          cp build/fs-bms.bin "dist/fs-bms${suffix}.bin"
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           notes=$(git tag -l --format='%(contents:subject)' "${GITHUB_REF_NAME}")
-          jq -n --arg v "${GITHUB_REF_NAME}" --arg u "${base}/fs-bms.bin" --arg n "${notes}" \
-            '{version: $v, url: $u, notes: $n}' > dist/version.json
-          cat dist/version.json
+          jq -n --arg v "${GITHUB_REF_NAME}" --arg u "${base}/fs-bms${suffix}.bin" --arg n "${notes}" \
+            '{version: $v, url: $u, notes: $n}' > "dist/version${suffix}.json"
+          cat "dist/version${suffix}.json"
 
       - name: Publish release
         uses: softprops/action-gh-release@v2
         with:
-          files: |
-            dist/fs-bms.bin
-            dist/version.json
+          files: dist/*
           generate_release_notes: true

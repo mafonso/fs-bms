@@ -6,7 +6,9 @@
 #include "esp_app_desc.h"
 #include "esp_chip_info.h"
 #include "esp_flash.h"
+#if CONFIG_SPIRAM
 #include "esp_psram.h"
+#endif
 #include "esp_heap_caps.h"
 #include "esp_ota_ops.h"
 #include "esp_idf_version.h"
@@ -32,8 +34,13 @@ static const char *TAG = "web";
 #endif
 
 // Sockets for browsers (page loads plus one WebSocket per tab); LWIP_MAX_SOCKETS
-// in sdkconfig.defaults must be at least this + 3.
+// in sdkconfig.defaults.<target> must be at least this + 3. Without PSRAM each
+// connection's buffers come out of scarce internal RAM.
+#if CONFIG_SPIRAM
 #define WEB_MAX_SOCKETS 16
+#else
+#define WEB_MAX_SOCKETS 8
+#endif
 // The server is single-threaded: a stalled client blocks every other request for
 // up to this long (seconds) per send/recv.
 #define WEB_IO_TIMEOUT_S 3
@@ -87,7 +94,11 @@ cJSON *web_info_json(void)
     cJSON_AddNumberToObject(board, "cores", chip.cores);
     cJSON_AddNumberToObject(board, "cpu_mhz", CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ);
     cJSON_AddNumberToObject(board, "flash_bytes", flash);
+#if CONFIG_SPIRAM
     cJSON_AddNumberToObject(board, "psram_bytes", esp_psram_get_size());
+#else
+    cJSON_AddNumberToObject(board, "psram_bytes", 0);
+#endif
     cJSON_AddNumberToObject(board, "psram_free", heap_caps_get_free_size(MALLOC_CAP_SPIRAM));
     cJSON_AddNumberToObject(board, "heap_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(board, "heap_min_free", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));

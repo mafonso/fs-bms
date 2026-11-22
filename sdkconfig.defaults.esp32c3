@@ -1,0 +1,19 @@
+# ESP32-C3 with 4 MB flash and no PSRAM: everything lives in ~320 KB internal RAM,
+# so the web server gets fewer connections and smaller TCP buffers than on the S3.
+CONFIG_ESPTOOLPY_FLASHSIZE_4MB=y
+
+# Two ~1.9 MB OTA slots
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
+
+CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
+
+# 8 browser connections (web.c WEB_MAX_SOCKETS without PSRAM) + 3 httpd-internal
+# + OTA + the setup hotspot's captive DNS
+CONFIG_LWIP_MAX_SOCKETS=13
+CONFIG_LWIP_TCP_ACCEPTMBOX_SIZE=8
+# TCP PCBs, including closed connections in TIME_WAIT
+CONFIG_LWIP_MAX_ACTIVE_TCP=20
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=8192
+
+# NimBLE host memory in internal RAM
+CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL=y

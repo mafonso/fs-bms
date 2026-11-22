@@ -1,4 +1,4 @@
-// The BOOT button (GPIO0, active low). An any-edge interrupt wakes a task that
+// The BOOT button (GPIO0, or GPIO9 on the C3; active low). An any-edge interrupt wakes a task that
 // debounces, counts presses and detects long presses, then tells the rest of
 // the firmware through APP_EVENT_BUTTON and browsers through topic 'button'.
 // Other features react to the event (factory_reset.c resets on a 10 s hold);
@@ -17,8 +17,12 @@
 
 static const char *TAG = "button";
 
-// GPIO0 is a strapping pin (held low at reset = download mode): only read it.
+// A strapping pin (held low at reset = download mode): only read it.
+#if CONFIG_IDF_TARGET_ESP32C3
+#define BUTTON_GPIO   GPIO_NUM_9
+#else
 #define BUTTON_GPIO   GPIO_NUM_0
+#endif
 #define DEBOUNCE_MS   30
 #define LONG_PRESS_MS 1000
 

@@ -8,6 +8,9 @@ on:
 jobs:
   build:
     runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        target: [esp32s3, esp32c3]
     steps:
       - uses: actions/checkout@v5
 
@@ -15,12 +18,12 @@ jobs:
         uses: espressif/esp-idf-ci-action@v1
         with:
           esp_idf_version: v6.1
-          target: esp32s3
+          target: ${{ matrix.target }}
 
       - name: Image size
         run: ls -l build/fs-bms.bin
 
       - uses: actions/upload-artifact@v4
         with:
-          name: fs-bms-${{ github.sha }}
+          name: fs-bms-${{ matrix.target }}-${{ github.sha }}
           path: build/fs-bms.bin

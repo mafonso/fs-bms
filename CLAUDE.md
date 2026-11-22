@@ -1,7 +1,7 @@
 # fs-bms
 
-ESP-IDF v6.1 firmware for an ESP32-S3 N16R8 (16 MB flash, 8 MB PSRAM) that reads a Felicity Solar
-LiFePO4 BMS over BLE and serves it as Prometheus `/metrics`, with a web UI, WebSocket hub,
+ESP-IDF v6.1 firmware for an ESP32-S3 N16R8 (16 MB flash, 8 MB PSRAM) or an ESP32-C3 (4 MB flash, no
+PSRAM) that reads a Felicity Solar LiFePO4 BMS over BLE and serves it as Prometheus `/metrics`, with a web UI, WebSocket hub,
 GitHub-Releases OTA and a USB console.
 
 ## BMS
@@ -29,13 +29,19 @@ GitHub-Releases OTA and a USB console.
 . ~/esp/esp-idf/export.sh
 idf.py build
 idf.py flash monitor     # Ctrl-] quits monitor
+# ESP32-C3: idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig set-target esp32c3, then the same -B/-D on build
 ```
+
+- Chips: `sdkconfig.defaults` holds shared settings; `sdkconfig.defaults.<target>` the chip's flash, PSRAM,
+  partition table (`partitions.csv` 16 MB, `partitions_4mb.csv`) and memory sizing. Code that differs
+  per chip uses `CONFIG_SPIRAM` (memory) or `CONFIG_IDF_TARGET_*` (pins). Without PSRAM, internal heap
+  is the limit: check `heap_min_free` in `/api/info` after a change. Build both targets.
 
 - If a build dir predates a change to `sdkconfig.defaults`, delete `sdkconfig` (and rerun the build) so the
   new defaults apply. Missing WebSocket support stops the build with an `#error` saying exactly this.
 - If after flashing the board sits in the ROM bootloader (no app output), reset it into the app:
   `esptool --port <port> --before no-reset --after watchdog-reset chip-id`
-- Never use GPIO19/20, TinyUSB or deep sleep in dev firmware: they break USB-Serial/JTAG, which the
+- Never use the USB pins (GPIO19/20 on the S3, GPIO18/19 on the C3), TinyUSB or deep sleep in dev firmware: they break USB-Serial/JTAG, which the
   console and auto-reset flashing depend on.
 - Secrets (Wi-Fi password) go only in the git-ignored `sdkconfig.secrets`
   (copy `sdkconfig.secrets.example`). Never put them in `sdkconfig.defaults` or source.
@@ -68,7 +74,8 @@ git tag -a vX.Y.Z -m "One-line notes shown on the board"
 git push origin vX.Y.Z
 ```
 
-`release.yml` builds and publishes `fs-bms.bin` and `version.json`; boards install it from
+`release.yml` builds each chip and publishes `fs-bms.bin` and `version.json` (ESP32-S3; names kept for
+boards already deployed) and `fs-bms-esp32c3.bin` and `version-esp32c3.json`; boards install it from
 Settings → Check for updates (or `ota check` / `ota update` on the console). A new image that can't
 reach Wi-Fi within 60 s rolls back on its own.
 

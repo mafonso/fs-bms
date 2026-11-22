@@ -14,7 +14,11 @@ menu "App configuration"
 
     config APP_OTA_MANIFEST_URL
         string "OTA manifest URL"
+        default "https://github.com/mafonso/fs-bms/releases/latest/download/version-esp32c3.json" if IDF_TARGET_ESP32C3
         default "https://github.com/mafonso/fs-bms/releases/latest/download/version.json"
+        help
+            Each chip has its own manifest and image; the ESP32-S3's keep the original
+            names (version.json, fs-bms.bin).
 
     config APP_BMS_DEFAULT_PASSKEY
         int "Default BMS pairing passkey"

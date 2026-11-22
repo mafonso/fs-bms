@@ -1,6 +1,6 @@
 # fs-bms
 
-ESP32-S3 firmware that reads a **Felicity Solar LiFePO4 battery's BMS** over Bluetooth LE
+ESP32-S3/ESP32-C3 firmware that reads a **Felicity Solar LiFePO4 battery's BMS** over Bluetooth LE
 and publishes it over Wi-Fi as a **Prometheus `/metrics`** endpoint. It also has a live web page, a
 JSON API and a USB console. It updates itself from this repo's GitHub Releases.
 
@@ -18,7 +18,10 @@ JSON API and a USB console. It updates itself from this repo's GitHub Releases.
 
 ## Requirements
 
-- ESP32-S3 with 16 MB flash and 8 MB PSRAM (N16R8), within BLE range of the battery
+- One of these boards, within BLE range of the battery:
+  - ESP32-S3 with 16 MB flash and 8 MB PSRAM (N16R8): the default build.
+  - ESP32-C3 with 4 MB flash (no PSRAM): same features, except the home page charts, which need PSRAM
+    for their history; fewer simultaneous browser connections (8).
 - ESP-IDF v6.1
 - A Felicity Solar LiFePO4 battery with BLE (advertises as `F07…` or `F10…`)
 
@@ -32,6 +35,16 @@ In a parallel bank every pack has its own BLE radio. One board reads one pack (p
 cp sdkconfig.secrets.example sdkconfig.secrets   # Wi-Fi password, git-ignored
 idf.py build flash monitor
 ```
+
+That builds for the ESP32-S3. For an ESP32-C3, use a separate build directory:
+
+```sh
+idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig set-target esp32c3
+idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig build flash monitor
+```
+
+A blank board reboots continuously and can drop off USB before flashing starts: hold BOOT (GPIO0 on
+the S3, GPIO9 on the C3) while plugging it in for the first flash.
 
 The Wi-Fi password in `sdkconfig.secrets` only seeds NVS on first boot. Release builds don't
 contain it, and OTA keeps what's in NVS, including a passkey set with `bms pin`.
@@ -129,7 +142,8 @@ git tag -a v0.2.0 -m "Short description shown on the board"
 git push origin v0.2.0
 ```
 
-The `Release firmware` workflow publishes `fs-bms.bin` and `version.json`. Boards install it from
+The `Release firmware` workflow publishes `fs-bms.bin` and `version.json` for the ESP32-S3, and
+`fs-bms-esp32c3.bin` and `version-esp32c3.json` for the ESP32-C3; each board fetches its own chip's. Boards install it from
 Settings → **Check for updates** (or `ota check` / `ota update`). A new image that can't reach Wi-Fi
 within 60 s rolls back on its own. Boards look for updates at `CONFIG_APP_OTA_MANIFEST_URL`; a fork
 should point it at its own releases.

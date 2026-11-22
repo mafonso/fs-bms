@@ -39,7 +39,7 @@ static const char *TAG = "web";
 #if CONFIG_SPIRAM
 #define WEB_MAX_SOCKETS 16
 #else
-#define WEB_MAX_SOCKETS 8
+#define WEB_MAX_SOCKETS 6
 #endif
 // The server is single-threaded: a stalled client blocks every other request for
 // up to this long (seconds) per send/recv.
@@ -103,6 +103,8 @@ cJSON *web_info_json(void)
     cJSON_AddNumberToObject(board, "heap_free", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(board, "heap_min_free", heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
     cJSON_AddNumberToObject(board, "heap_largest", heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
+    // Lowest free stack of the HTTP server task (this handler runs on it), in bytes.
+    cJSON_AddNumberToObject(board, "web_stack_min_free", uxTaskGetStackHighWaterMark(NULL));
     cJSON_AddNumberToObject(board, "uptime_s", esp_timer_get_time() / 1000000);
     cJSON_AddStringToObject(board, "reset_reason", reset_reason_name(esp_reset_reason()));
     cJSON_AddStringToObject(board, "mac", mac_str);
@@ -323,7 +325,7 @@ static esp_err_t ota_check_post(httpd_req_t *req)
     if (!web_check_csrf(req) || !web_require_admin(req)) {
         return ESP_OK;
     }
-    ota_check();
+    ota_check_async();   // poll GET /api/ota until state leaves "checking"
     return web_send_json(req, ota_json());
 }
 
@@ -363,8 +365,8 @@ static esp_err_t reboot_post(httpd_req_t *req)
 esp_err_t web_start(void)
 {
     httpd_config_t cfg = HTTPD_DEFAULT_CONFIG();
-    // The OTA check does a TLS handshake inside the request handler.
-    cfg.stack_size = 10240;
+    // TLS (OTA) runs on tasks of its own; handlers only build JSON and text.
+    cfg.stack_size = 6144;
     cfg.max_uri_handlers = 32;
     cfg.max_open_sockets = WEB_MAX_SOCKETS;
     // Reuse the oldest idle connection instead of refusing new ones.

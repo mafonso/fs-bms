@@ -10,7 +10,7 @@ jobs:
     runs-on: ubuntu-latest
     strategy:
       matrix:
-        target: [esp32s3, esp32c3]
+        target: [esp32c3, esp32s3]
     steps:
       - uses: actions/checkout@v5
 
@@ -19,9 +19,24 @@ jobs:
         with:
           esp_idf_version: v6.1
           target: ${{ matrix.target }}
+          command: idf.py build && python -m esp_idf_size --format json2 build/fs-bms.map > build/size.json
 
-      - name: Image size
-        run: ls -l build/fs-bms.bin
+      # The ESP32-C3 has no PSRAM: static RAM comes straight out of the heap that Wi-Fi,
+      # BLE, TLS (OTA) and the web server share. Raise the budget deliberately, after
+      # checking heap_min_free and heap_largest on a board (see CLAUDE.md).
+      - name: Memory budget
+        run: |
+          python3 - "${{ matrix.target }}" <<'PY'
+          import json, sys
+          target = sys.argv[1]
+          budget = {"esp32c3": 130000}.get(target)
+          layout = {m["name"]: m for m in json.load(open("build/size.json"))["layout"]}
+          dram = layout["DRAM"]["used"]
+          print(f"{target}: static DRAM {dram} bytes" + (f", budget {budget}" if budget else ""))
+          if budget and dram > budget:
+              sys.exit(f"static DRAM {dram} exceeds the {target} budget of {budget} bytes")
+          PY
+          ls -l build/fs-bms.bin
 
       - uses: actions/upload-artifact@v4
         with:

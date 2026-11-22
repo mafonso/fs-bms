@@ -7,9 +7,9 @@ CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions_4mb.csv"
 
 CONFIG_ESP_DEFAULT_CPU_FREQ_MHZ_160=y
 
-# 8 browser connections (web.c WEB_MAX_SOCKETS without PSRAM) + 3 httpd-internal
-# + OTA + the setup hotspot's captive DNS
-CONFIG_LWIP_MAX_SOCKETS=13
+# 6 browser connections (web.c WEB_MAX_SOCKETS without PSRAM) + 3 httpd-internal
+# + OTA + the setup hotspot's captive DNS + 1 spare (MQTT)
+CONFIG_LWIP_MAX_SOCKETS=12
 CONFIG_LWIP_TCP_ACCEPTMBOX_SIZE=8
 # TCP PCBs, including closed connections in TIME_WAIT
 CONFIG_LWIP_MAX_ACTIVE_TCP=20

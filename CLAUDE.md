@@ -1,7 +1,7 @@
 # fs-bms
 
-ESP-IDF v6.1 firmware for an ESP32-S3 N16R8 (16 MB flash, 8 MB PSRAM) or an ESP32-C3 (4 MB flash, no
-PSRAM) that reads a Felicity Solar LiFePO4 BMS over BLE and serves it as Prometheus `/metrics`, with a web UI, WebSocket hub,
+ESP-IDF v6.1 firmware for an ESP32-C3 (4 MB flash, no PSRAM; the main target) or an ESP32-S3 N16R8
+(16 MB flash, 8 MB PSRAM) that reads a Felicity Solar LiFePO4 BMS over BLE and serves it as Prometheus `/metrics`, with a web UI, WebSocket hub,
 GitHub-Releases OTA and a USB console.
 
 ## BMS
@@ -32,16 +32,21 @@ GitHub-Releases OTA and a USB console.
 . ~/esp/esp-idf/export.sh
 idf.py build
 idf.py flash monitor     # Ctrl-] quits monitor
-# ESP32-C3: idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig set-target esp32c3, then the same -B/-D on build
+# ESP32-S3: idf.py -B build-s3 -D SDKCONFIG=build-s3/sdkconfig set-target esp32s3, then the same -B/-D on build
 ```
 
 - Chips: `sdkconfig.defaults` holds shared settings; `sdkconfig.defaults.<target>` the chip's flash, PSRAM,
   partition table (`partitions.csv` 16 MB, `partitions_4mb.csv`) and memory sizing. Code that differs
   per chip uses `CONFIG_SPIRAM` (memory) or `CONFIG_IDF_TARGET_*` (pins). Without PSRAM, internal heap
-  is the limit: check `heap_min_free` and `heap_largest` in `/api/info` after a change (C3: ~68 KB
-  idle, ~12 KB at the low point of a page load or an OTA), and build both targets. A TLS session (OTA)
-  needs ~40 KB: OTA waits for a BLE session in progress (`ota_set_quiesce_hook`) and none start
-  while `ota_busy()`. The C3 caps Wi-Fi TX power at 10 dBm: many
+  is the limit. **Design every feature for the C3 first**:
+  - Check `heap_min_free`, `heap_largest` and `web_stack_min_free` in `/api/info` (and the
+    `esp_heap_*` gauges in `/metrics`) on a C3 after a change, idle and during a page load and an OTA.
+  - CI fails if the C3's static DRAM passes its budget in `build.yml`; raise it only after that check.
+  - A TLS session (OTA) needs ~40 KB of heap. Memory-heavy work (a BLE session, a TLS connection of
+    your own) must not overlap it: don't start while `ota_busy()`, and register with
+    `ota_add_quiesce_hook()` so OTA waits for (or makes you close) work in progress.
+  - Big buffers: allocate per request and free, size them by `CONFIG_SPIRAM`, and prefer streaming
+    (`httpd_resp_send_chunk`) over building a whole response in memory. The C3 caps Wi-Fi TX power at 10 dBm: many
   small C3 boards never get past Wi-Fi authentication at full power.
 
 - If a build dir predates a change to `sdkconfig.defaults`, delete `sdkconfig` (and rerun the build) so the

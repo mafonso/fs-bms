@@ -1019,6 +1019,12 @@ static esp_err_t metrics_get(httpd_req_t *req)
         }
     }
     unlock();
+    // Internal heap, the limit on boards without PSRAM: watch the trend over weeks.
+    gauge(&b, "esp_heap_free_bytes", "Free internal heap", heap_caps_get_free_size(MALLOC_CAP_INTERNAL));
+    gauge(&b, "esp_heap_min_free_bytes", "Lowest free internal heap since boot",
+          heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL));
+    gauge(&b, "esp_heap_largest_free_block_bytes", "Largest free internal heap block",
+          heap_caps_get_largest_free_block(MALLOC_CAP_INTERNAL));
 
     httpd_resp_set_type(req, "text/plain; version=0.0.4; charset=utf-8");
     esp_err_t err = httpd_resp_send(req, b.buf, b.len);
@@ -1384,7 +1390,9 @@ static esp_err_t bms_init(void)
     s_ev = xEventGroupCreate();
     s_lock = xSemaphoreCreateMutex();
     s_st.enabled = settings_get_bms_enabled();
-    ota_set_quiesce_hook(wait_ble_idle);
+    if (ota_add_quiesce_hook(wait_ble_idle) != ESP_OK) {
+        ESP_LOGW(TAG, "OTA quiesce hook not registered");
+    }
     s_frame = heap_caps_malloc(sizeof(*s_frame), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
     if (!s_frame) {
         s_frame = malloc(sizeof(*s_frame));

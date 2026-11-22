@@ -19,9 +19,9 @@ JSON API and a USB console. It updates itself from this repo's GitHub Releases.
 ## Requirements
 
 - One of these boards, within BLE range of the battery:
-  - ESP32-S3 with 16 MB flash and 8 MB PSRAM (N16R8): the default build.
-  - ESP32-C3 with 4 MB flash (no PSRAM): same features, except the home page charts, which need PSRAM
-    for their history; fewer simultaneous browser connections (8). Wi-Fi transmit power is capped
+  - ESP32-C3 with 4 MB flash (no PSRAM): the main target and the default build. Everything except
+    the home page charts, which need PSRAM for their history; up to 6 browser connections at once.
+  - ESP32-S3 with 16 MB flash and 8 MB PSRAM (N16R8): everything, including the charts. Wi-Fi transmit power is capped
     at 10 dBm, because many small C3 boards can't join an access point at full power.
 - ESP-IDF v6.1
 - A Felicity Solar LiFePO4 battery with BLE (advertises as `F07…` or `F10…`)
@@ -37,11 +37,11 @@ cp sdkconfig.secrets.example sdkconfig.secrets   # Wi-Fi password, git-ignored
 idf.py build flash monitor
 ```
 
-That builds for the ESP32-S3. For an ESP32-C3, use a separate build directory:
+That builds for the ESP32-C3. For an ESP32-S3, use a separate build directory:
 
 ```sh
-idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig set-target esp32c3
-idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig build flash monitor
+idf.py -B build-s3 -D SDKCONFIG=build-s3/sdkconfig set-target esp32s3
+idf.py -B build-s3 -D SDKCONFIG=build-s3/sdkconfig build flash monitor
 ```
 
 A blank board reboots continuously and can drop off USB before flashing starts: hold BOOT (GPIO0 on

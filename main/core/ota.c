@@ -22,7 +22,8 @@ static const char *TAG = "ota";
 #define HTTP_BUF_SIZE 4096
 
 static ota_status_t s_status;
-static void (*s_quiesce)(void);
+#define QUIESCE_MAX 4
+static void (*s_quiesce[QUIESCE_MAX])(void);
 static SemaphoreHandle_t s_lock;
 
 static void lock(void)
@@ -74,15 +75,21 @@ bool ota_busy(void)
     return busy;
 }
 
-void ota_set_quiesce_hook(void (*fn)(void))
+esp_err_t ota_add_quiesce_hook(void (*fn)(void))
 {
-    s_quiesce = fn;
+    for (int i = 0; i < QUIESCE_MAX; i++) {
+        if (!s_quiesce[i]) {
+            s_quiesce[i] = fn;
+            return ESP_OK;
+        }
+    }
+    return ESP_ERR_NO_MEM;
 }
 
 static void quiesce(void)
 {
-    if (s_quiesce) {
-        s_quiesce();
+    for (int i = 0; i < QUIESCE_MAX && s_quiesce[i]; i++) {
+        s_quiesce[i]();
     }
 }
 
@@ -137,17 +144,32 @@ static esp_err_t on_http_event(esp_http_client_event_t *ev)
     return ESP_OK;
 }
 
-esp_err_t ota_check(void)
+// Move to OTA_CHECKING unless a check or an update already runs.
+static bool claim_check(void)
 {
     lock();
-    if (s_status.state == OTA_CHECKING || s_status.state == OTA_DOWNLOADING ||
-        s_status.state == OTA_REBOOTING) {
-        unlock();
+    bool busy = s_status.state == OTA_CHECKING || s_status.state == OTA_DOWNLOADING ||
+                s_status.state == OTA_REBOOTING;
+    if (!busy) {
+        s_status.state = OTA_CHECKING;
+        s_status.error[0] = '\0';
+    }
+    unlock();
+    return !busy;
+}
+
+static esp_err_t run_check(void);
+
+esp_err_t ota_check(void)
+{
+    if (!claim_check()) {
         return ESP_ERR_INVALID_STATE;
     }
-    s_status.state = OTA_CHECKING;
-    s_status.error[0] = '\0';
-    unlock();
+    return run_check();
+}
+
+static esp_err_t run_check(void)
+{
     quiesce();
 
     body_t body = {.buf = calloc(1, MANIFEST_MAX)};
@@ -205,6 +227,24 @@ esp_err_t ota_check(void)
              s_status.update_available ? "available" : "not needed");
     unlock();
     cJSON_Delete(root);
+    return ESP_OK;
+}
+
+static void check_task(void *arg)
+{
+    run_check();
+    vTaskDelete(NULL);
+}
+
+esp_err_t ota_check_async(void)
+{
+    if (!claim_check()) {
+        return ESP_ERR_INVALID_STATE;
+    }
+    if (xTaskCreate(check_task, "ota_check", 8192, NULL, 5, NULL) != pdPASS) {
+        set_error("task create failed", ESP_ERR_NO_MEM);
+        return ESP_ERR_NO_MEM;
+    }
     return ESP_OK;
 }
 

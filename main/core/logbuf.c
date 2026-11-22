@@ -8,7 +8,12 @@
 
 // Nothing in this file may log: the hook would recurse into itself.
 
+// Without PSRAM the ring comes out of the same internal RAM as everything else.
+#if CONFIG_SPIRAM
 #define LOGBUF_SIZE 16384
+#else
+#define LOGBUF_SIZE 4096
+#endif
 
 // Records are [uint16 len][text], packed back to back and wrapping around.
 static uint8_t *s_buf;

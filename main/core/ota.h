@@ -32,6 +32,10 @@ void ota_confirm_or_rollback(void);
 // Fetch the release manifest and compare it with the running version (blocking).
 esp_err_t ota_check(void);
 
+// The same on a task of its own (the TLS handshake needs a large stack); poll
+// ota_get_status() until the state leaves OTA_CHECKING.
+esp_err_t ota_check_async(void);
+
 // Download and install the version found by the last check, then reboot (async).
 esp_err_t ota_start_update(void);
 
@@ -41,6 +45,7 @@ void ota_get_status(ota_status_t *out);
 // not start, since Wi-Fi shares the radio and a TLS session needs ~40 KB of heap.
 bool ota_busy(void);
 
-// Called on the OTA path before each TLS connection, once ota_busy() is true. It
-// should return when the caller's own heavy work has finished (bounded wait).
-void ota_set_quiesce_hook(void (*fn)(void));
+// Called on the OTA path before each TLS connection, once ota_busy() is true. A hook
+// returns when the caller's own heavy work has finished or been closed (bounded wait).
+// Register in a feature's init; up to 4.
+esp_err_t ota_add_quiesce_hook(void (*fn)(void));

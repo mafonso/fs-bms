@@ -166,7 +166,15 @@ function mountFirmware(el) {
 
   $('check').onclick = async () => {
     showOta({ state: 'checking' });
-    try { showOta(await App.api('/api/ota/check', { method: 'POST' })); }
+    try {
+      let o = await App.api('/api/ota/check', { method: 'POST' });
+      // The check runs on the board's own task; wait for it (TLS to GitHub takes a few seconds).
+      for (let i = 0; i < 60 && o.state === 'checking'; i++) {
+        await new Promise(r => setTimeout(r, 1000));
+        o = await App.api('/api/ota');
+      }
+      showOta(o);
+    }
     catch (e) { showOta({ state: 'error', error: 'Request failed' }); }
   };
 

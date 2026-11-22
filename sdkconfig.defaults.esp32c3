@@ -13,7 +13,29 @@ CONFIG_LWIP_MAX_SOCKETS=13
 CONFIG_LWIP_TCP_ACCEPTMBOX_SIZE=8
 # TCP PCBs, including closed connections in TIME_WAIT
 CONFIG_LWIP_MAX_ACTIVE_TCP=20
-CONFIG_LWIP_TCP_SND_BUF_DEFAULT=8192
+CONFIG_LWIP_TCP_SND_BUF_DEFAULT=5760
 
 # NimBLE host memory in internal RAM
 CONFIG_BT_NIMBLE_MEM_ALLOC_MODE_INTERNAL=y
+
+# Many small C3 boards (e.g. "SuperMini") have a poorly matched antenna: at full
+# power their signal is too distorted for access points to answer, and the board
+# never gets past authentication (reason 2, "auth -> init"). 10 dBm (the lowest
+# this option allows) fixes that and is plenty for a board near the access point.
+CONFIG_ESP_PHY_MAX_WIFI_TX_POWER=10
+
+# Internal RAM budget. Code that runs from IRAM comes out of the same SRAM as
+# the heap on the C3, so keep the Wi-Fi driver in flash, and bound how many
+# frames Wi-Fi and TLS may buffer. At the defaults, a page load (about 10
+# requests at once) left under 2 KB of heap.
+CONFIG_ESP_WIFI_IRAM_OPT=n
+CONFIG_ESP_WIFI_RX_IRAM_OPT=n
+CONFIG_ESP_WIFI_STATIC_RX_BUFFER_NUM=6
+CONFIG_ESP_WIFI_DYNAMIC_RX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_DYNAMIC_TX_BUFFER_NUM=16
+CONFIG_ESP_WIFI_AMPDU_TX_ENABLED=n
+CONFIG_ESP_WIFI_RX_BA_WIN=4
+# TLS (OTA) record buffers are allocated only while a record is in flight
+CONFIG_MBEDTLS_DYNAMIC_BUFFER=y
+# The board only scans and connects; it never advertises or scans passively
+CONFIG_BT_NIMBLE_ROLE_BROADCASTER=n

@@ -32,16 +32,36 @@ jobs:
       # The ESP32-S3 assets keep their original names (fs-bms.bin, version.json),
       # which boards from before multi-chip support look for. Other chips get
       # fs-bms-<target>.bin and version-<target>.json (CONFIG_APP_OTA_MANIFEST_URL).
+      # fs-bms-<target>-factory.bin (bootloader, partition table and app) is for a
+      # board's first flash over USB.
       - name: Prepare release assets
         run: |
           if [ "${{ matrix.target }}" = esp32s3 ]; then suffix=""; else suffix="-${{ matrix.target }}"; fi
           mkdir dist
           cp build/fs-bms.bin "dist/fs-bms${suffix}.bin"
+          (cd build && pipx run --spec "esptool>=5,<6" esptool --chip ${{ matrix.target }} merge-bin \
+            -o "../dist/fs-bms-${{ matrix.target }}-factory.bin" @flash_args)
           base="https://github.com/${GITHUB_REPOSITORY}/releases/download/${GITHUB_REF_NAME}"
           notes=$(git tag -l --format='%(contents:subject)' "${GITHUB_REF_NAME}")
           jq -n --arg v "${GITHUB_REF_NAME}" --arg u "${base}/fs-bms${suffix}.bin" --arg n "${notes}" \
             '{version: $v, url: $u, notes: $n}' > "dist/version${suffix}.json"
           cat "dist/version${suffix}.json"
+          ls -l dist
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/*
+
+  # One job publishes every chip's files, so the matrix jobs don't race to create the release.
+  publish:
+    needs: build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
 
       - name: Publish release
         uses: softprops/action-gh-release@v2

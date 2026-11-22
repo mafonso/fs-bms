@@ -21,7 +21,8 @@ JSON API and a USB console. It updates itself from this repo's GitHub Releases.
 - One of these boards, within BLE range of the battery:
   - ESP32-S3 with 16 MB flash and 8 MB PSRAM (N16R8): the default build.
   - ESP32-C3 with 4 MB flash (no PSRAM): same features, except the home page charts, which need PSRAM
-    for their history; fewer simultaneous browser connections (8).
+    for their history; fewer simultaneous browser connections (8). Wi-Fi transmit power is capped
+    at 10 dBm, because many small C3 boards can't join an access point at full power.
 - ESP-IDF v6.1
 - A Felicity Solar LiFePO4 battery with BLE (advertises as `F07…` or `F10…`)
 
@@ -45,6 +46,22 @@ idf.py -B build-c3 -D SDKCONFIG=build-c3/sdkconfig build flash monitor
 
 A blank board reboots continuously and can drop off USB before flashing starts: hold BOOT (GPIO0 on
 the S3, GPIO9 on the C3) while plugging it in for the first flash.
+
+## Flash a release (no build)
+
+Each release has a complete image per chip, `fs-bms-esp32s3-factory.bin` and
+`fs-bms-esp32c3-factory.bin` (bootloader, partition table and app). Connect the board's USB port
+(hold BOOT while plugging in a blank board), then either:
+
+- **Browser** (Chrome or Edge): open <https://espressif.github.io/esptool-js/>, Connect, choose the
+  board's port, add the file at address `0x0`, Program.
+- **esptool** (`pip install esptool`):
+  ```sh
+  esptool write-flash 0x0 fs-bms-esp32c3-factory.bin   # macOS port: /dev/cu.usbmodem*, add --port if several
+  ```
+
+This erases nothing else: a board that already ran fs-bms keeps its Wi-Fi, passkey and BLE bond. Then
+unplug and replug it (or press RESET), and set it up as below. Later versions arrive by OTA.
 
 The Wi-Fi password in `sdkconfig.secrets` only seeds NVS on first boot. Release builds don't
 contain it, and OTA keeps what's in NVS, including a passkey set with `bms pin`.

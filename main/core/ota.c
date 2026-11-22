@@ -61,6 +61,17 @@ void ota_get_status(ota_status_t *out)
     unlock();
 }
 
+bool ota_busy(void)
+{
+    if (!s_lock) {
+        return false;
+    }
+    lock();
+    bool busy = s_status.state == OTA_DOWNLOADING || s_status.state == OTA_REBOOTING;
+    unlock();
+    return busy;
+}
+
 // Compare "vMAJOR.MINOR.PATCH[-suffix]" strings numerically; suffixes are ignored.
 static int version_cmp(const char *a, const char *b)
 {

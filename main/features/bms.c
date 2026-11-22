@@ -27,6 +27,7 @@
 #include "host/util/util.h"
 #include "app_events.h"
 #include "auth.h"
+#include "ota.h"
 #include "settings.h"
 #include "web.h"
 #include "features.h"
@@ -816,7 +817,8 @@ static void bms_task(void *arg)
             ulTaskNotifyTake(pdTRUE, portMAX_DELAY);   // until turned on, or a search is asked for
             continue;
         }
-        if (paused <= 0) {
+        // A BLE session stalls Wi-Fi long enough to break an update download.
+        if (paused <= 0 && !ota_busy()) {
             poll_once();
         }
         // Keep the cadence from the start of the poll; `bms poll` wakes us early.

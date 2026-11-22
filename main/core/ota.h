@@ -36,3 +36,7 @@ esp_err_t ota_check(void);
 esp_err_t ota_start_update(void);
 
 void ota_get_status(ota_status_t *out);
+
+// True while an update is downloading or about to reboot: radio-heavy work (BLE)
+// should wait, since Wi-Fi shares the radio on single-antenna chips.
+bool ota_busy(void);

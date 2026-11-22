@@ -60,8 +60,11 @@ Each release has a complete image per chip, `fs-bms-esp32s3-factory.bin` and
   esptool write-flash 0x0 fs-bms-esp32c3-factory.bin   # macOS port: /dev/cu.usbmodem*, add --port if several
   ```
 
-This erases nothing else: a board that already ran fs-bms keeps its Wi-Fi, passkey and BLE bond. Then
-unplug and replug it (or press RESET), and set it up as below. Later versions arrive by OTA.
+The factory image covers the settings area too, so it **erases the board's settings** (Wi-Fi, admin
+password, passkey, BLE pairing): use it for a new board. A board that already runs fs-bms updates by
+OTA (Settings → Check for updates), or over USB with `fs-bms-<chip>.bin` written to `0x20000` together
+with `ota_data_initial.bin` from a build at `0xf000`, which keeps its settings. After flashing, unplug
+and replug the board (or press RESET) and set it up as below.
 
 The Wi-Fi password in `sdkconfig.secrets` only seeds NVS on first boot. Release builds don't
 contain it, and OTA keeps what's in NVS, including a passkey set with `bms pin`.
